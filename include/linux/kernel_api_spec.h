@@ -849,7 +849,7 @@ struct kernel_api_spec {
 #define KAPI_PARAM_OUT		(KAPI_PARAM_OUT)
 #define KAPI_PARAM_INOUT	(KAPI_PARAM_IN | KAPI_PARAM_OUT)
 #define KAPI_PARAM_OPTIONAL	(KAPI_PARAM_OPTIONAL)
-#define KAPI_PARAM_USER_PTR	(KAPI_PARAM_USER | KAPI_PARAM_PTR)
+#define KAPI_PARAM_USER_PTR	(KAPI_PARAM_USER)
 
 /* Validation and runtime checking */
 
