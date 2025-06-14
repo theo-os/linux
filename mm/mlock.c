@@ -25,6 +25,7 @@
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
 #include <linux/secretmem.h>
+#include <linux/syscall_api_spec.h>
 
 #include "internal.h"
 
@@ -657,6 +658,110 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 		return __mlock_posix_error_return(error);
 	return 0;
 }
+
+
+DEFINE_KERNEL_API_SPEC(sys_mlock)
+	KAPI_DESCRIPTION("Lock pages in memory")
+	KAPI_LONG_DESC("Locks pages in the specified address range into RAM, "
+		       "preventing them from being paged to swap. Requires "
+		       "CAP_IPC_LOCK capability or RLIMIT_MEMLOCK resource limit.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	KAPI_PARAM(0, "start", "unsigned long", "Starting address of memory range to lock")
+		.type = KAPI_TYPE_UINT,
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		.constraint_type = KAPI_CONSTRAINT_NONE,
+		.constraints = "Rounded down to page boundary",
+	KAPI_PARAM_END
+	KAPI_PARAM(1, "len", "size_t", "Length of memory range to lock in bytes")
+		.type = KAPI_TYPE_UINT,
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		.constraint_type = KAPI_CONSTRAINT_RANGE,
+		KAPI_PARAM_RANGE(0, LONG_MAX)
+		.constraints = "Rounded up to page boundary",
+	KAPI_PARAM_END
+
+	.return_spec = {
+		.type_name = "long",
+		.type = KAPI_TYPE_INT,
+		.check_type = KAPI_RETURN_ERROR_CHECK,
+		.success_value = 0,
+		.description = "0 on success, negative error code on failure",
+	},
+
+	KAPI_ERROR(0, -ENOMEM, "ENOMEM", "Address range issue",
+		   "Some of the specified range is not mapped, has unmapped gaps, "
+		   "or the lock would cause the number of mapped regions to exceed the limit.")
+	KAPI_ERROR(1, -EPERM, "EPERM", "Insufficient privileges",
+		   "The caller is not privileged (no CAP_IPC_LOCK) and RLIMIT_MEMLOCK is 0.")
+	KAPI_ERROR(2, -EINVAL, "EINVAL", "Address overflow",
+		   "The result of the addition start+len was less than start (arithmetic overflow).")
+	KAPI_ERROR(3, -EAGAIN, "EAGAIN", "Some or all memory could not be locked",
+		   "Some or all of the specified address range could not be locked.")
+	KAPI_ERROR(4, -EINTR, "EINTR", "Interrupted by signal",
+		   "The operation was interrupted by a fatal signal before completion.")
+
+	.error_count = 5,
+	.param_count = 2,
+	.since_version = "2.0",
+
+	.locks[0] = {
+		.lock_name = "mmap_lock",
+		.lock_type = KAPI_LOCK_RWLOCK,
+		.acquired = true,
+		.released = true,
+		.description = "Process memory map write lock",
+	},
+	.lock_count = 1,
+
+	/* Signal specifications */
+	.signal_count = 1,
+
+	/* Fatal signals can interrupt mmap_write_lock_killable */
+	KAPI_SIGNAL(0, 0, "FATAL", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Fatal signal pending")
+		KAPI_SIGNAL_DESC("Fatal signals (SIGKILL, etc.) can interrupt the operation "
+				 "when acquiring mmap_write_lock_killable(), causing -EINTR return")
+	KAPI_SIGNAL_END
+
+	.examples = "mlock(addr, 4096);  // Lock one page\n"
+		    "mlock(addr, len);   // Lock range of pages",
+	.notes = "Memory locks do not stack - multiple calls on the same range can be "
+		 "undone by a single munlock. Locks are not inherited by child processes. "
+		 "Pages are locked on whole page boundaries.",
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_MODIFY_STATE | KAPI_EFFECT_ALLOC_MEMORY,
+			 "process memory",
+			 "Locks pages into physical memory, preventing swapping")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE,
+			 "mm->locked_vm",
+			 "Increases process locked memory counter")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_ALLOC_MEMORY,
+			 "physical pages",
+			 "May allocate and populate page table entries")
+		KAPI_EFFECT_CONDITION("Pages not already present")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(3)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "memory pages", "swappable", "locked in RAM",
+			 "Pages become non-swappable and pinned in physical memory")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "VMA flags", "unlocked", "VM_LOCKED set",
+			 "Virtual memory area marked as locked")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(2)
+KAPI_END_SPEC;
 
 SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
 {
