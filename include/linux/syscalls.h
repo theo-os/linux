@@ -87,6 +87,7 @@ struct xattr_args;
 #include <linux/bug.h>
 #include <linux/sem.h>
 #include <asm/siginfo.h>
+#include <linux/syscall_api_spec.h>
 #include <linux/unistd.h>
 #include <linux/quota.h>
 #include <linux/key.h>
