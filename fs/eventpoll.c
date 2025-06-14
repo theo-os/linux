@@ -21,6 +21,7 @@
 #include <linux/hash.h>
 #include <linux/spinlock.h>
 #include <linux/syscalls.h>
+#include <linux/syscall_api_spec.h>
 #include <linux/rbtree.h>
 #include <linux/wait.h>
 #include <linux/eventpoll.h>
@@ -2265,6 +2266,91 @@ out_free_ep:
 	return error;
 }
 
+
+/* Valid values for epoll_create1 flags parameter */
+static const s64 epoll_create1_valid_values[] = { 0, EPOLL_CLOEXEC };
+
+DEFINE_KERNEL_API_SPEC(sys_epoll_create1)
+	KAPI_DESCRIPTION("Create an epoll instance")
+	KAPI_LONG_DESC("Creates a new epoll instance and returns a file descriptor "
+		       "referring to that instance. The file descriptor is used for all "
+		       "subsequent calls to the epoll interface.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	KAPI_PARAM(0, "flags", "int", "Creation flags for the epoll instance")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		.constraint_type = KAPI_CONSTRAINT_ENUM,
+		.enum_values = epoll_create1_valid_values,
+		.enum_count = ARRAY_SIZE(epoll_create1_valid_values),
+		.constraints = "Must be 0 or EPOLL_CLOEXEC",
+	KAPI_PARAM_END
+
+	KAPI_RETURN("long", "File descriptor on success, negative error code on failure")
+		.type = KAPI_TYPE_INT,
+		.check_type = KAPI_RETURN_FD,
+	KAPI_RETURN_END
+
+	KAPI_ERROR(0, -EINVAL, "EINVAL", "Invalid flags specified",
+		   "The flags parameter contains invalid values. Only EPOLL_CLOEXEC is allowed.")
+	KAPI_ERROR(1, -EMFILE, "EMFILE", "Per-process file descriptor limit reached",
+		   "The per-process limit on the number of open file descriptors has been reached.")
+	KAPI_ERROR(2, -ENFILE, "ENFILE", "System file table overflow",
+		   "The system-wide limit on the total number of open files has been reached.")
+	KAPI_ERROR(3, -ENOMEM, "ENOMEM", "Insufficient kernel memory",
+		   "There was insufficient kernel memory to create the epoll instance.")
+	KAPI_ERROR(4, -EINTR, "EINTR", "Interrupted by signal",
+		   "The system call was interrupted by a signal before the epoll instance could be created.")
+
+	.error_count = 5,
+	.param_count = 1,
+	.since_version = "2.6.27",
+	.examples = "int epfd = epoll_create1(EPOLL_CLOEXEC);",
+	.notes = "EPOLL_CLOEXEC sets the close-on-exec (FD_CLOEXEC) flag on the new file descriptor. "
+		 "When all file descriptors referring to an epoll instance are closed, the kernel "
+		 "destroys the instance and releases associated resources.",
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_RESOURCE_CREATE | KAPI_EFFECT_ALLOC_MEMORY,
+			 "epoll instance",
+			 "Creates a new epoll instance and allocates kernel memory for it")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_RESOURCE_CREATE,
+			 "file descriptor",
+			 "Allocates a new file descriptor in the process's file descriptor table")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(2)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "epoll instance", "non-existent", "created and empty",
+			 "A new epoll instance is created with no monitored file descriptors")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(1)
+
+	/* Signal specifications */
+	KAPI_SIGNAL(0, SIGINT, "SIGINT", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("During creation if process receives SIGINT")
+		KAPI_SIGNAL_DESC("If interrupted during kernel memory allocation, returns -EINTR")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(1, SIGTERM, "SIGTERM", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("During creation if process receives SIGTERM")
+		KAPI_SIGNAL_DESC("If interrupted during kernel memory allocation, returns -EINTR")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(2, SIGKILL, "SIGKILL", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_TERMINATE)
+		KAPI_SIGNAL_CONDITION("At any point during the syscall")
+		KAPI_SIGNAL_DESC("Process is terminated immediately, epoll instance creation may be incomplete")
+	KAPI_SIGNAL_END
+
+	.signal_count = 3,
+KAPI_END_SPEC;
 SYSCALL_DEFINE1(epoll_create1, int, flags)
 {
 	return do_epoll_create(flags);
