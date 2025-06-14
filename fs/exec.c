@@ -52,6 +52,7 @@
 #include <linux/mount.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
+#include <linux/syscall_api_spec.h>
 #include <linux/tsacct_kern.h>
 #include <linux/cn_proc.h>
 #include <linux/audit.h>
@@ -1997,7 +1998,224 @@ void set_dumpable(struct mm_struct *mm, int value)
 	set_mask_bits(&mm->flags, MMF_DUMPABLE_MASK, value);
 }
 
+
+DEFINE_KERNEL_API_SPEC(sys_execve)
+	KAPI_DESCRIPTION("Execute a new program")
+	KAPI_LONG_DESC("Executes the program referred to by filename. This causes the program "
+		       "that is currently being run by the calling process to be replaced with "
+		       "a new program, with newly initialized stack, heap, and (initialized and "
+		       "uninitialized) data segments. The process ID remains the same.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	KAPI_PARAM(0, "filename", "const char __user *", "Pathname of the program to execute")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN | KAPI_PARAM_USER)
+		.type = KAPI_TYPE_PATH,
+		.constraint_type = KAPI_CONSTRAINT_NONE,
+		.constraints = "Must be a valid pathname to an executable file or script",
+	KAPI_PARAM_END
+
+	KAPI_PARAM(1, "argv", "const char __user *const __user *", "Array of argument strings passed to the new program")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN | KAPI_PARAM_USER)
+		.type = KAPI_TYPE_USER_PTR,
+		.constraint_type = KAPI_CONSTRAINT_NONE,
+		.constraints = "NULL-terminated array of pointers to null-terminated strings",
+	KAPI_PARAM_END
+
+	KAPI_PARAM(2, "envp", "const char __user *const __user *", "Array of environment strings for the new program")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN | KAPI_PARAM_USER)
+		.type = KAPI_TYPE_USER_PTR,
+		.constraint_type = KAPI_CONSTRAINT_NONE,
+		.constraints = "NULL-terminated array of pointers to null-terminated strings in form key=value",
+	KAPI_PARAM_END
+
+	KAPI_RETURN("long", "Does not return on success; returns -1 on error")
+		.type = KAPI_TYPE_INT,
+		.check_type = KAPI_RETURN_ERROR_CHECK,
+	KAPI_RETURN_END
+
+	KAPI_ERROR(0, -E2BIG, "E2BIG", "Argument list too long",
+		   "The total size of argv and envp exceeds the system limit.")
+	KAPI_ERROR(1, -EACCES, "EACCES", "Permission denied",
+		   "Search permission denied on a component of the path, file is not regular, "
+		   "or execute permission denied for file or interpreter.")
+	KAPI_ERROR(2, -EFAULT, "EFAULT", "Bad address",
+		   "filename, argv, or envp points outside accessible address space.")
+	KAPI_ERROR(3, -EINVAL, "EINVAL", "Invalid executable format",
+		   "An ELF executable has more than one PT_INTERP segment.")
+	KAPI_ERROR(4, -EIO, "EIO", "I/O error",
+		   "An I/O error occurred while reading from the file system.")
+	KAPI_ERROR(5, -EISDIR, "EISDIR", "Is a directory",
+		   "An ELF interpreter was a directory.")
+	KAPI_ERROR(6, -ELIBBAD, "ELIBBAD", "Invalid ELF interpreter",
+		   "An ELF interpreter was not in a recognized format.")
+	KAPI_ERROR(7, -ELOOP, "ELOOP", "Too many symbolic links",
+		   "Too many symbolic links encountered while resolving filename or interpreter.")
+	KAPI_ERROR(8, -EMFILE, "EMFILE", "Too many open files",
+		   "The per-process limit on open file descriptors has been reached.")
+	KAPI_ERROR(9, -ENAMETOOLONG, "ENAMETOOLONG", "Filename too long",
+		   "filename or one of the strings in argv or envp is too long.")
+	KAPI_ERROR(10, -ENFILE, "ENFILE", "System file table overflow",
+		   "The system-wide limit on open files has been reached.")
+	KAPI_ERROR(11, -ENOENT, "ENOENT", "File not found",
+		   "The file filename or an interpreter does not exist.")
+	KAPI_ERROR(12, -ENOEXEC, "ENOEXEC", "Exec format error",
+		   "An executable is not in a recognized format, is for wrong architecture, "
+		   "or has other format errors preventing execution.")
+	KAPI_ERROR(13, -ENOMEM, "ENOMEM", "Out of memory",
+		   "Insufficient kernel memory available.")
+	KAPI_ERROR(14, -ENOTDIR, "ENOTDIR", "Not a directory",
+		   "A component of the path prefix is not a directory.")
+	KAPI_ERROR(15, -EPERM, "EPERM", "Operation not permitted",
+		   "The filesystem is mounted nosuid, the user is not root, and the file has "
+		   "set-user-ID or set-group-ID bit set.")
+	KAPI_ERROR(16, -ETXTBSY, "ETXTBSY", "Text file busy",
+		   "The executable was open for writing by one or more processes.")
+	KAPI_ERROR(17, -EAGAIN, "EAGAIN", "Resource temporarily unavailable",
+		   "RLIMIT_NPROC limit exceeded - too many processes for this user.")
+
+	.error_count = 18,
+	.param_count = 3,
+	.since_version = "1.0",
+	.examples = "char *argv[] = { \"echo\", \"hello\", \"world\", NULL };\n"
+		    "char *envp[] = { \"PATH=/bin\", NULL };\n"
+		    "execve(\"/bin/echo\", argv, envp);\n"
+		    "/* This point is only reached on error */\n"
+		    "perror(\"execve failed\");\n"
+		    "exit(EXIT_FAILURE);",
+	.notes = "On success, execve() does not return; the new program is executed. "
+		 "File descriptors remain open unless marked close-on-exec. "
+		 "Signal dispositions are reset to default except for ignored signals. "
+		 "Any alternate signal stack is not preserved. "
+		 "The process's set of pending signals is cleared. "
+		 "All threads except the calling thread are destroyed.",
+
+	/* Fatal signals can interrupt exec */
+	KAPI_SIGNAL(0, 0, "FATAL_SIGNALS", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_TERMINATE)
+		KAPI_SIGNAL_CONDITION("Fatal signal pending during exec setup")
+		KAPI_SIGNAL_DESC("Fatal signals (checked via fatal_signal_pending()) can interrupt "
+				 "exec during setup phases like de_thread(). This causes exec to fail "
+				 "and the process to exit.")
+	KAPI_SIGNAL_END
+
+	/* SIGKILL sent to other threads */
+	KAPI_SIGNAL(1, SIGKILL, "SIGKILL", KAPI_SIGNAL_SEND, KAPI_SIGNAL_ACTION_TERMINATE)
+		KAPI_SIGNAL_TARGET("All other threads in the thread group")
+		KAPI_SIGNAL_CONDITION("Multi-threaded process doing exec")
+		KAPI_SIGNAL_DESC("During de_thread(), zap_other_threads() sends SIGKILL to all "
+				 "other threads in the thread group to ensure only the execing "
+				 "thread survives.")
+	KAPI_SIGNAL_END
+
+	/* Signal handlers reset */
+	KAPI_SIGNAL(2, 0, "ALL_HANDLERS", KAPI_SIGNAL_HANDLE, KAPI_SIGNAL_ACTION_CUSTOM)
+		KAPI_SIGNAL_CONDITION("Signal has a handler installed")
+		KAPI_SIGNAL_DESC("flush_signal_handlers() resets all signal handlers to SIG_DFL "
+				 "except for signals that are ignored (SIG_IGN). This happens "
+				 "after de_thread() completes.")
+	KAPI_SIGNAL_END
+
+	/* Ignored signals preserved */
+	KAPI_SIGNAL(3, 0, "IGNORED_SIGNALS", KAPI_SIGNAL_IGNORE, KAPI_SIGNAL_ACTION_CUSTOM)
+		KAPI_SIGNAL_CONDITION("Signal disposition is SIG_IGN")
+		KAPI_SIGNAL_DESC("Signals set to SIG_IGN are preserved across exec. This is "
+				 "POSIX-compliant behavior allowing parent processes to ignore "
+				 "signals in children.")
+	KAPI_SIGNAL_END
+
+	/* Pending signals cleared */
+	KAPI_SIGNAL(4, 0, "PENDING_SIGNALS", KAPI_SIGNAL_HANDLE, KAPI_SIGNAL_ACTION_CUSTOM)
+		KAPI_SIGNAL_CONDITION("Any pending signals")
+		KAPI_SIGNAL_DESC("All pending signals are cleared during exec. This includes "
+				 "both thread-specific and process-wide pending signals.")
+	KAPI_SIGNAL_END
+
+	/* Timer signals cleared */
+	KAPI_SIGNAL(5, 0, "TIMER_SIGNALS", KAPI_SIGNAL_HANDLE, KAPI_SIGNAL_ACTION_CUSTOM)
+		KAPI_SIGNAL_CONDITION("Timer-generated signals pending")
+		KAPI_SIGNAL_DESC("flush_itimer_signals() clears any pending timer signals "
+				 "(SIGALRM, SIGVTALRM, SIGPROF) to prevent confusion in the "
+				 "new program.")
+	KAPI_SIGNAL_END
+
+	/* Exit signal set to SIGCHLD */
+	KAPI_SIGNAL(6, SIGCHLD, "SIGCHLD", KAPI_SIGNAL_SEND, KAPI_SIGNAL_ACTION_DEFAULT)
+		KAPI_SIGNAL_TARGET("Parent process when this process exits")
+		KAPI_SIGNAL_CONDITION("Process exit after exec")
+		KAPI_SIGNAL_DESC("The exit_signal is set to SIGCHLD during exec, ensuring the "
+				 "parent will receive SIGCHLD when this process terminates.")
+	KAPI_SIGNAL_END
+
+	/* Alternate signal stack cleared */
+	KAPI_SIGNAL(7, 0, "SIGALTSTACK", KAPI_SIGNAL_HANDLE, KAPI_SIGNAL_ACTION_CUSTOM)
+		KAPI_SIGNAL_CONDITION("Process had alternate signal stack")
+		KAPI_SIGNAL_DESC("Any alternate signal stack (sigaltstack) is not preserved "
+				 "across exec. The new program starts with no alternate stack.")
+	KAPI_SIGNAL_END
+
+	.signal_count = 8,
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_PROCESS_STATE | KAPI_EFFECT_FREE_MEMORY | KAPI_EFFECT_ALLOC_MEMORY,
+			 "process image",
+			 "Replaces entire process image including code, data, heap, and stack")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE | KAPI_EFFECT_RESOURCE_DESTROY,
+			 "file descriptors",
+			 "Closes all file descriptors with close-on-exec flag set")
+		KAPI_EFFECT_CONDITION("FD_CLOEXEC flag set")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_MODIFY_STATE,
+			 "signal handlers",
+			 "Resets all signal handlers to default, preserves ignored signals")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(3, KAPI_EFFECT_PROCESS_STATE | KAPI_EFFECT_SIGNAL_SEND,
+			 "thread group",
+			 "Kills all other threads in the thread group with SIGKILL")
+		KAPI_EFFECT_CONDITION("Multi-threaded process")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(4, KAPI_EFFECT_MODIFY_STATE,
+			 "process attributes",
+			 "Clears pending signals, timers, alternate signal stack, and various process attributes")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(5, KAPI_EFFECT_FILESYSTEM,
+			 "executable file",
+			 "Opens and reads the executable file, may trigger filesystem operations")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(6)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "process memory",
+			 "old program image", "new program image",
+			 "Complete replacement of process address space with new program")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "process credentials",
+			 "current credentials", "potentially modified credentials",
+			 "May change effective UID/GID based on file permissions")
+		KAPI_STATE_TRANS_COND("setuid/setgid binary")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(2, "thread state",
+			 "multi-threaded", "single-threaded",
+			 "Process becomes single-threaded after killing other threads")
+		KAPI_STATE_TRANS_COND("Multi-threaded process")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(3, "signal state",
+			 "custom handlers and pending signals", "default handlers, no pending signals",
+			 "Signal handling reset to clean state for new program")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(4)
+KAPI_END_SPEC;
 SYSCALL_DEFINE3(execve,
+
 		const char __user *, filename,
 		const char __user *const __user *, argv,
 		const char __user *const __user *, envp)
