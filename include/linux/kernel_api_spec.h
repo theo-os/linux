@@ -779,6 +779,13 @@ struct kernel_api_spec {
 	char connection_termination[KAPI_MAX_DESC_LEN];
 	char data_transfer_semantics[KAPI_MAX_DESC_LEN];
 #endif /* CONFIG_NET */
+
+	/* IOCTL-specific fields */
+	unsigned int cmd;			/* IOCTL command number */
+	char cmd_name[KAPI_MAX_NAME_LEN];	/* Human-readable command name */
+	size_t input_size;			/* Size of input structure (0 if none) */
+	size_t output_size;			/* Size of output structure (0 if none) */
+	char file_ops_name[KAPI_MAX_NAME_LEN];	/* Name of the file_operations structure */
 } __attribute__((packed));
 
 /* Macros for defining API specifications */
@@ -964,6 +971,13 @@ struct kernel_api_spec {
 	.notes = n,
 
 /**
+ * KAPI_SINCE_VERSION - Set the since version
+ * @version: Version string when the API was introduced
+ */
+#define KAPI_SINCE_VERSION(version) \
+	.since_version = version,
+
+/**
  * KAPI_DEPRECATED - Mark API as deprecated
  */
 #define KAPI_DEPRECATED \
@@ -1105,10 +1119,10 @@ struct kernel_api_spec {
 			.constraint_type = KAPI_CONSTRAINT_MASK, \
 			.valid_mask = mask,
 
-#define KAPI_FIELD_CONSTRAINT_ENUM(values, count) \
+#define KAPI_FIELD_CONSTRAINT_ENUM(...) \
 			.constraint_type = KAPI_CONSTRAINT_ENUM, \
-			.enum_values = values, \
-			.enum_count = count,
+			.enum_values = __VA_ARGS__, \
+			.enum_count = ARRAY_SIZE(__VA_ARGS__),
 
 #define KAPI_STRUCT_FIELD_END },
 
@@ -1171,6 +1185,20 @@ struct kernel_api_spec {
 #define KAPI_STATE_TRANS_COUNT(n) \
 	.state_trans_count = n,
 
+/**
+ * KAPI_ERROR_COUNT - Set the error count
+ * @count: Number of errors defined
+ */
+#define KAPI_ERROR_COUNT(count) \
+	.error_count = count,
+
+/**
+ * KAPI_PARAM_COUNT - Set the parameter count
+ * @count: Number of parameters defined
+ */
+#define KAPI_PARAM_COUNT(count) \
+	.param_count = count,
+
 /* Helper macros for common side effect patterns */
 #define KAPI_EFFECTS_MEMORY	(KAPI_EFFECT_ALLOC_MEMORY | KAPI_EFFECT_FREE_MEMORY)
 #define KAPI_EFFECTS_LOCKING	(KAPI_EFFECT_LOCK_ACQUIRE | KAPI_EFFECT_LOCK_RELEASE)
@@ -1183,7 +1211,7 @@ struct kernel_api_spec {
 #define KAPI_PARAM_OUT		(KAPI_PARAM_OUT)
 #define KAPI_PARAM_INOUT	(KAPI_PARAM_IN | KAPI_PARAM_OUT)
 #define KAPI_PARAM_OPTIONAL	(KAPI_PARAM_OPTIONAL)
-#define KAPI_PARAM_USER_PTR	(KAPI_PARAM_USER | KAPI_PARAM_PTR)
+#define KAPI_PARAM_USER_PTR	(KAPI_PARAM_USER)
 
 /* Common signal timing constants */
 #define KAPI_SIGNAL_TIME_ENTRY		"entry"
@@ -1494,6 +1522,169 @@ static inline bool kapi_get_param_constraint(const char *api_name, int param_idx
 
 #define KAPI_CONSTRAINT_COUNT(n) \
 	.constraint_count = n,
+
+/* IOCTL-specific functions */
+#ifdef CONFIG_KAPI_SPEC
+int kapi_register_ioctl_spec(const struct kernel_api_spec *spec);
+void kapi_unregister_ioctl_spec(unsigned int cmd);
+const struct kernel_api_spec *kapi_get_ioctl_spec(unsigned int cmd);
+
+#ifdef CONFIG_KAPI_RUNTIME_CHECKS
+struct file;
+int kapi_validate_ioctl(struct file *filp, unsigned int cmd, void __user *arg);
+int kapi_validate_ioctl_struct(const struct kernel_api_spec *spec,
+                               const void *data, size_t size);
+
+/* IOCTL validation wrapper support */
+struct kapi_fops_wrapper {
+	const struct file_operations *real_fops;
+	struct file_operations *wrapped_fops;
+	long (*real_ioctl)(struct file *, unsigned int, unsigned long);
+};
+
+void kapi_register_wrapper(struct kapi_fops_wrapper *wrapper);
+long kapi_ioctl_validation_wrapper(struct file *filp, unsigned int cmd,
+                                   unsigned long arg);
+
+/* Macro for defining file operations with automatic IOCTL validation */
+#define KAPI_DEFINE_FOPS(name, ...) \
+static const struct file_operations __kapi_real_##name = { \
+	__VA_ARGS__ \
+}; \
+static struct file_operations __kapi_wrapped_##name; \
+static struct kapi_fops_wrapper __kapi_wrapper_##name; \
+static const struct file_operations *name; \
+static void kapi_init_fops_##name(void) \
+{ \
+	if (__kapi_real_##name.unlocked_ioctl) { \
+		__kapi_wrapped_##name = __kapi_real_##name; \
+		__kapi_wrapper_##name.real_fops = &__kapi_real_##name; \
+		__kapi_wrapper_##name.wrapped_fops = &__kapi_wrapped_##name; \
+		__kapi_wrapper_##name.real_ioctl = \
+			__kapi_real_##name.unlocked_ioctl; \
+		__kapi_wrapped_##name.unlocked_ioctl = \
+			kapi_ioctl_validation_wrapper; \
+		kapi_register_wrapper(&__kapi_wrapper_##name); \
+		name = &__kapi_wrapped_##name; \
+	} else { \
+		name = &__kapi_real_##name; \
+	} \
+}
+
+#else /* !CONFIG_KAPI_RUNTIME_CHECKS */
+
+/* When runtime checks are disabled, no wrapping occurs */
+#define KAPI_DEFINE_FOPS(name, ...) \
+static const struct file_operations name = { __VA_ARGS__ }; \
+static inline void kapi_init_fops_##name(void) {}
+
+#endif /* CONFIG_KAPI_RUNTIME_CHECKS */
+#else /* !CONFIG_KAPI_SPEC */
+static inline int kapi_register_ioctl_spec(const struct kernel_api_spec *spec)
+{
+	return 0;
+}
+static inline void kapi_unregister_ioctl_spec(unsigned int cmd) {}
+static inline const struct kernel_api_spec *kapi_get_ioctl_spec(unsigned int cmd)
+{
+	return NULL;
+}
+#endif /* CONFIG_KAPI_SPEC */
+
+/* IOCTL-specific macros */
+
+/**
+ * DEFINE_KAPI_IOCTL_SPEC - Define an IOCTL API specification using kernel_api_spec
+ * @ioctl_name: IOCTL command name/identifier
+ */
+#define DEFINE_KAPI_IOCTL_SPEC(ioctl_name) \
+	static struct kernel_api_spec __kapi_ioctl_spec_##ioctl_name \
+	__used __section(".kapi_specs") = {	\
+		.name = __stringify(ioctl_name),	\
+		.api_type = KAPI_API_IOCTL,	\
+		.version = 1,
+
+/**
+ * KAPI_IOCTL_CMD - Set the IOCTL command number
+ * @cmd_val: The IOCTL command value
+ */
+#define KAPI_IOCTL_CMD(cmd_val) \
+	.cmd = cmd_val,
+
+/**
+ * KAPI_IOCTL_CMD_NAME - Set the IOCTL command name
+ * @name_str: String name of the command
+ */
+#define KAPI_IOCTL_CMD_NAME(name_str) \
+	.cmd_name = name_str,
+
+/**
+ * KAPI_IOCTL_INPUT_SIZE - Set the input structure size
+ * @size: Size of the input structure
+ */
+#define KAPI_IOCTL_INPUT_SIZE(size) \
+	.input_size = size,
+
+/**
+ * KAPI_IOCTL_OUTPUT_SIZE - Set the output structure size
+ * @size: Size of the output structure
+ */
+#define KAPI_IOCTL_OUTPUT_SIZE(size) \
+	.output_size = size,
+
+/**
+ * KAPI_IOCTL_FILE_OPS_NAME - Set the file operations name
+ * @ops_name: Name of the file_operations structure
+ */
+#define KAPI_IOCTL_FILE_OPS_NAME(ops_name) \
+	.file_ops_name = ops_name,
+
+/**
+ * Common IOCTL parameter specifications
+ */
+#define KAPI_IOCTL_PARAM_SIZE							\
+	KAPI_PARAM(0, "size", "__u32", "Size of the structure")		\
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)					\
+		.type = KAPI_TYPE_UINT,						\
+		.constraint_type = KAPI_CONSTRAINT_CUSTOM,			\
+		.constraints = "Must match sizeof(struct)",			\
+	KAPI_PARAM_END
+
+#define KAPI_IOCTL_PARAM_FLAGS							\
+	KAPI_PARAM(1, "flags", "__u32", "Feature flags")			\
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)					\
+		.type = KAPI_TYPE_UINT,						\
+		.constraint_type = KAPI_CONSTRAINT_MASK,			\
+		.valid_mask = 0,	/* 0 means no flags currently */	\
+	KAPI_PARAM_END
+
+/**
+ * KAPI_IOCTL_PARAM_USER_BUF - User buffer parameter
+ * @idx: Parameter index
+ * @name: Parameter name
+ * @desc: Parameter description
+ * @len_idx: Index of the length parameter
+ */
+#define KAPI_IOCTL_PARAM_USER_BUF(idx, name, desc, len_idx)		\
+	KAPI_PARAM(idx, name, "__aligned_u64", desc)			\
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN | KAPI_PARAM_USER_PTR)	\
+		.type = KAPI_TYPE_USER_PTR,				\
+		.size_param_idx = len_idx,				\
+	KAPI_PARAM_END
+
+/**
+ * KAPI_IOCTL_PARAM_USER_OUT_BUF - User output buffer parameter
+ * @idx: Parameter index
+ * @name: Parameter name
+ * @desc: Parameter description
+ * @len_idx: Index of the length parameter
+ */
+#define KAPI_IOCTL_PARAM_USER_OUT_BUF(idx, name, desc, len_idx)	\
+	KAPI_PARAM(idx, name, "__aligned_u64", desc)			\
+		KAPI_PARAM_FLAGS(KAPI_PARAM_OUT | KAPI_PARAM_USER_PTR)	\
+		.type = KAPI_TYPE_USER_PTR,				\
+		.size_param_idx = len_idx,				\
+	KAPI_PARAM_END
 
 /* Network operation characteristics macros */
 #define KAPI_NET_CONNECTION_ORIENTED \

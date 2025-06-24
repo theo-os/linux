@@ -1120,3 +1120,90 @@ static int __init kapi_debugfs_init(void)
 late_initcall(kapi_debugfs_init);
 
 #endif /* CONFIG_DEBUG_FS */
+
+/* IOCTL specification registry */
+#ifdef CONFIG_KAPI_SPEC
+
+
+static DEFINE_MUTEX(ioctl_spec_mutex);
+static LIST_HEAD(ioctl_specs);
+
+struct ioctl_spec_entry {
+	struct list_head list;
+	const struct kernel_api_spec *spec;
+};
+
+/**
+ * kapi_register_ioctl_spec - Register an IOCTL API specification
+ * @spec: IOCTL specification to register
+ *
+ * Return: 0 on success, negative error code on failure
+ */
+int kapi_register_ioctl_spec(const struct kernel_api_spec *spec)
+{
+	struct ioctl_spec_entry *entry;
+
+	if (!spec || spec->cmd_name[0] == '\0')
+		return -EINVAL;
+
+	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+	if (!entry)
+		return -ENOMEM;
+
+	entry->spec = spec;
+
+	mutex_lock(&ioctl_spec_mutex);
+	list_add_tail(&entry->list, &ioctl_specs);
+	mutex_unlock(&ioctl_spec_mutex);
+
+	pr_debug("Registered IOCTL spec: %s (0x%x)\n", spec->cmd_name, spec->cmd);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(kapi_register_ioctl_spec);
+
+/**
+ * kapi_unregister_ioctl_spec - Unregister an IOCTL API specification
+ * @cmd: IOCTL command number to unregister
+ */
+void kapi_unregister_ioctl_spec(unsigned int cmd)
+{
+	struct ioctl_spec_entry *entry, *tmp;
+
+	mutex_lock(&ioctl_spec_mutex);
+	list_for_each_entry_safe(entry, tmp, &ioctl_specs, list) {
+		if (entry->spec->cmd == cmd) {
+			list_del(&entry->list);
+			kfree(entry);
+			pr_debug("Unregistered IOCTL spec for cmd 0x%x\n", cmd);
+			break;
+		}
+	}
+	mutex_unlock(&ioctl_spec_mutex);
+}
+EXPORT_SYMBOL_GPL(kapi_unregister_ioctl_spec);
+
+/**
+ * kapi_get_ioctl_spec - Retrieve IOCTL specification by command number
+ * @cmd: IOCTL command number
+ *
+ * Return: Pointer to the specification or NULL if not found
+ */
+const struct kernel_api_spec *kapi_get_ioctl_spec(unsigned int cmd)
+{
+	struct ioctl_spec_entry *entry;
+	const struct kernel_api_spec *spec = NULL;
+
+	mutex_lock(&ioctl_spec_mutex);
+	list_for_each_entry(entry, &ioctl_specs, list) {
+		if (entry->spec->cmd == cmd) {
+			spec = entry->spec;
+			break;
+		}
+	}
+	mutex_unlock(&ioctl_spec_mutex);
+
+	return spec;
+}
+EXPORT_SYMBOL_GPL(kapi_get_ioctl_spec);
+
+#endif /* CONFIG_KAPI_SPEC */
