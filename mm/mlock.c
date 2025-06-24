@@ -981,6 +981,136 @@ SYSCALL_DEFINE3(mlock2, unsigned long, start, size_t, len, int, flags)
 	return do_mlock(start, len, vm_flags);
 }
 
+
+DEFINE_KERNEL_API_SPEC(sys_munlock)
+	KAPI_DESCRIPTION("Unlock pages in memory")
+	KAPI_LONG_DESC("Unlocks pages in the specified address range, allowing them "
+		       "to be paged out to swap if needed.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	/* Parameters */
+	KAPI_PARAM(0, "start", "unsigned long", "Starting address of memory range to unlock")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_NONE)
+		KAPI_PARAM_CONSTRAINT("Rounded down to page boundary")
+	KAPI_PARAM_END
+
+	KAPI_PARAM(1, "len", "size_t", "Length of memory range to unlock in bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_RANGE(0, LONG_MAX)
+		KAPI_PARAM_CONSTRAINT("Rounded up to page boundary")
+	KAPI_PARAM_END
+
+	/* Return specification */
+	KAPI_RETURN("long", "0 on success, negative error code on failure")
+		.type = KAPI_TYPE_INT,
+		.check_type = KAPI_RETURN_ERROR_CHECK,
+		.success_value = 0,
+	KAPI_RETURN_END
+
+	/* Error codes */
+	KAPI_ERROR(0, -ENOMEM, "ENOMEM", "Memory range not mapped", "(Linux 2.6.9 and later) Some of the specified address range does not correspond to mapped pages in the process address space.")
+	KAPI_ERROR(1, -EINTR, "EINTR", "Interrupted by signal", "The operation was interrupted by a signal before completion.")
+	KAPI_ERROR(2, -EINVAL, "EINVAL", "Address overflow", "The result of the addition start+len was less than start (arithmetic overflow).")
+
+	/* Signal specifications */
+	KAPI_SIGNAL(0, 0, "FATAL_SIGNALS", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Fatal signal pending during mmap_write_lock_killable")
+		KAPI_SIGNAL_DESC("Fatal signals (SIGKILL, SIGTERM, etc.) can interrupt the operation when acquiring mmap_write_lock_killable(), causing -EINTR return")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_MODIFY_STATE,
+			 "process memory",
+			 "Unlocks pages, making them eligible for swapping")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("Pages were previously locked")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE,
+			 "mm->locked_vm",
+			 "Decreases process locked memory counter")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("Pages were counted in locked_vm")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_MODIFY_STATE,
+			 "VMA flags",
+			 "Clears VM_LOCKED and VM_LOCKONFAULT from affected VMAs")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(3, KAPI_EFFECT_MODIFY_STATE,
+			 "page flags",
+			 "Clears PG_mlocked flag from unlocked pages")
+		KAPI_EFFECT_CONDITION("Pages had PG_mlocked set")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(4, KAPI_EFFECT_MODIFY_STATE,
+			 "LRU lists",
+			 "Moves pages from unevictable to appropriate LRU list")
+		KAPI_EFFECT_CONDITION("Pages were on unevictable list")
+	KAPI_SIDE_EFFECT_END
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "memory pages",
+			 "locked in RAM", "swappable",
+			 "Pages become eligible for swap out")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "VMA flags",
+			 "VM_LOCKED set", "VM_LOCKED cleared",
+			 "Virtual memory areas no longer marked as locked")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(2, "page residency",
+			 "guaranteed resident", "may be swapped",
+			 "Pages can now be evicted under memory pressure")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(3, "process statistics",
+			 "locked memory accounted", "normal memory accounting",
+			 "Memory no longer counted against RLIMIT_MEMLOCK")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(4, "page LRU status",
+			 "unevictable list", "active/inactive list",
+			 "Pages moved to normal LRU lists for reclaim")
+		KAPI_STATE_TRANS_COND("Pages were mlocked")
+	KAPI_STATE_TRANS_END
+
+	/* Locking information */
+	KAPI_LOCK(0, "mmap_lock", KAPI_LOCK_RWLOCK)
+		KAPI_LOCK_DESC("Process memory map write lock")
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Protects VMA modifications during unlock operation")
+	KAPI_LOCK_END
+
+	KAPI_LOCK(1, "lru_lock", KAPI_LOCK_SPINLOCK)
+		KAPI_LOCK_DESC("Per-memcg LRU list lock")
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Taken when moving pages from unevictable to normal LRU lists")
+	KAPI_LOCK_END
+
+	KAPI_ERROR_COUNT(3)
+	KAPI_PARAM_COUNT(2)
+	KAPI_SINCE_VERSION("2.0")
+	KAPI_SIGNAL_COUNT(1)
+	KAPI_SIDE_EFFECT_COUNT(5)
+	KAPI_STATE_TRANS_COUNT(5)
+	KAPI_LOCK_COUNT(2)
+	KAPI_EXAMPLES("munlock(addr, 4096);  // Unlock one page\n"
+		      "munlock(addr, len);   // Unlock range of pages")
+	KAPI_NOTES("No special permissions required to unlock memory. A single munlock() "
+		   "can undo multiple mlock() calls on the same range since locks don't stack.")
+KAPI_END_SPEC;
+
 SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
 {
 	int ret;
