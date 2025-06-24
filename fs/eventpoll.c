@@ -3026,6 +3026,193 @@ static int do_epoll_wait(int epfd, struct epoll_event __user *events,
 	return ep_poll(ep, events, maxevents, to);
 }
 
+
+DEFINE_KERNEL_API_SPEC(sys_epoll_wait)
+	KAPI_DESCRIPTION("Wait for events on an epoll instance")
+	KAPI_LONG_DESC("Waits for events on the epoll instance referred to by epfd. "
+		       "The function blocks the calling thread until either at least one of the "
+		       "file descriptors referred to by epfd becomes ready for some I/O operation, "
+		       "the call is interrupted by a signal handler, or the timeout expires.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	KAPI_PARAM(0, "epfd", "int", "File descriptor referring to the epoll instance")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_FD)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_NONE)
+	KAPI_PARAM_END
+
+	KAPI_PARAM(1, "events", "struct epoll_event __user *", "Buffer where ready events will be stored")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_OUT | KAPI_PARAM_USER)
+		KAPI_PARAM_TYPE(KAPI_TYPE_USER_PTR)
+		KAPI_PARAM_SIZE(sizeof(struct epoll_event))  /* Base size of single element */
+		.size_param_idx = 2,  /* Size determined by maxevents parameter */
+		.size_multiplier = sizeof(struct epoll_event),
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_NONE)
+		KAPI_PARAM_CONSTRAINT("Must point to an array of at least maxevents epoll_event structures")
+	KAPI_PARAM_END
+
+	KAPI_PARAM(2, "maxevents", "int", "Maximum number of events to return")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_INT)
+		KAPI_PARAM_RANGE(1, INT_MAX / sizeof(struct epoll_event))  /* EP_MAX_EVENTS */
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_CONSTRAINT("Must be greater than zero and not exceed system limits")
+	KAPI_PARAM_END
+
+	KAPI_PARAM(3, "timeout", "int", "Timeout in milliseconds")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_INT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_NONE)
+		KAPI_PARAM_CONSTRAINT("-1 blocks indefinitely, 0 returns immediately, >0 specifies milliseconds to wait")
+	KAPI_PARAM_END
+
+	KAPI_RETURN("long", "Number of ready file descriptors on success, negative error code on failure")
+		.type = KAPI_TYPE_INT,
+		.check_type = KAPI_RETURN_RANGE,
+		.success_min = 0,
+		.success_max = INT_MAX,
+	KAPI_RETURN_END
+
+	KAPI_ERROR(0, -EBADF, "EBADF", "epfd is not a valid file descriptor",
+		   "The epoll file descriptor is invalid or has been closed.")
+	KAPI_ERROR(1, -EFAULT, "EFAULT", "events points outside accessible address space",
+		   "The memory area pointed to by events is not accessible with write permissions.")
+	KAPI_ERROR(2, -EINTR, "EINTR", "Call interrupted by signal handler",
+		   "The call was interrupted by a signal handler before any events "
+		   "became ready or the timeout expired.")
+	KAPI_ERROR(3, -EINVAL, "EINVAL", "Invalid parameters",
+		   "epfd is not an epoll file descriptor, or maxevents is less than or equal to zero.")
+
+	.error_count = 4,
+	.param_count = 4,
+	.since_version = "2.6",
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_MODIFY_STATE,
+			 "ready list",
+			 "Removes events from the epoll ready list as they are reported")
+		KAPI_EFFECT_CONDITION("When events are available and level-triggered")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_SCHEDULE,
+			 "process state",
+			 "Blocks the calling thread until events are available or timeout")
+		KAPI_EFFECT_CONDITION("When timeout != 0 and no events are immediately available")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_MODIFY_STATE,
+			 "user memory",
+			 "Writes event data to user-provided buffer")
+		KAPI_EFFECT_CONDITION("When events are available")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(3, KAPI_EFFECT_PROCESS_STATE,
+			 "signal state",
+			 "Clears TIF_SIGPENDING if a signal was pending")
+		KAPI_EFFECT_CONDITION("When returning due to signal interruption")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(4)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "process", "running", "blocked",
+			 "Process blocks waiting for events")
+		KAPI_STATE_TRANS_COND("When no events available and timeout != 0")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "process", "blocked", "running",
+			 "Process wakes up due to events, timeout, or signal")
+		KAPI_STATE_TRANS_COND("When wait condition is satisfied")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(2, "epoll ready list", "has events", "events consumed",
+			 "Ready events are consumed from the epoll instance")
+		KAPI_STATE_TRANS_COND("When returning events to userspace")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(3, "events buffer", "uninitialized", "contains event data",
+			 "User buffer is populated with ready events")
+		KAPI_STATE_TRANS_COND("When events are available")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(4)
+
+	/* Signal specifications */
+	KAPI_SIGNAL(0, 0, "ANY", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Any pending signal")
+		KAPI_SIGNAL_DESC("Any signal delivered to the thread will interrupt epoll_wait() "
+				 "and cause it to return -EINTR. This is checked via signal_pending() "
+				 "after checking for available events.")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(1, SIGKILL, "SIGKILL", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_TERMINATE)
+		KAPI_SIGNAL_CONDITION("Always delivered, cannot be blocked")
+		KAPI_SIGNAL_DESC("SIGKILL will terminate the process. The epoll_wait call will "
+				 "not return as the process is terminated immediately.")
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(2, SIGSTOP, "SIGSTOP", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_STOP)
+		KAPI_SIGNAL_CONDITION("Always delivered, cannot be blocked")
+		KAPI_SIGNAL_DESC("SIGSTOP will stop the process. When continued with SIGCONT, "
+				 "epoll_wait may return -EINTR if the timeout has not expired.")
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(3, SIGCONT, "SIGCONT", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_CONTINUE)
+		KAPI_SIGNAL_CONDITION("When process is stopped")
+		KAPI_SIGNAL_DESC("SIGCONT resumes a stopped process. If epoll_wait was interrupted "
+				 "by SIGSTOP, it may return -EINTR when continued.")
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(4, SIGALRM, "SIGALRM", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Timer expiration")
+		KAPI_SIGNAL_DESC("SIGALRM from timer expiration will interrupt epoll_wait with -EINTR")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	.signal_count = 5,
+	.signal_mask_count = 0, /* No signal mask manipulation in epoll_wait */
+
+	/* Locking specifications */
+	KAPI_LOCK(0, "ep->lock", KAPI_LOCK_SPINLOCK)
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Protects the ready list while checking for and consuming events")
+	KAPI_LOCK_END
+
+	KAPI_LOCK(1, "ep->mtx", KAPI_LOCK_MUTEX)
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Protects against concurrent epoll_ctl operations during wait")
+	KAPI_LOCK_END
+
+	.lock_count = 2,
+
+	KAPI_EXAMPLES("struct epoll_event events[10];\n"
+		      "int nfds = epoll_wait(epfd, events, 10, 1000);\n"
+		      "if (nfds == -1) {\n"
+		      "    perror(\"epoll_wait\");\n"
+		      "    exit(EXIT_FAILURE);\n"
+		      "}\n"
+		      "for (int n = 0; n < nfds; ++n) {\n"
+		      "    if (events[n].data.fd == listen_sock) {\n"
+		      "        accept_new_connection();\n"
+		      "    } else {\n"
+		      "        handle_io(events[n].data.fd);\n"
+		      "    }\n"
+		      "}")
+	KAPI_NOTES("The timeout uses CLOCK_MONOTONIC and may be rounded up to system clock granularity. "
+		   "A timeout of -1 causes epoll_wait to block indefinitely, while a timeout of 0 "
+		   "causes it to return immediately even if no events are available. "
+		   "The struct epoll_event is defined as containing events (uint32_t) and data (epoll_data_t union). "
+		   "Edge-triggered mode (EPOLLET) can cause starvation if not all available data is "
+		   "drained when an event is received - new events are only generated on transitions "
+		   "from no data to data available. Always read/write until EAGAIN to avoid missing events. "
+		   "When using dup() or fork(), events may be delivered to multiple epoll instances "
+		   "monitoring the same file descriptor.")
+KAPI_END_SPEC;
+
 SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 		int, maxevents, int, timeout)
 {
