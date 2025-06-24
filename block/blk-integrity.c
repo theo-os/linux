@@ -13,6 +13,8 @@
 #include <linux/scatterlist.h>
 #include <linux/export.h>
 #include <linux/slab.h>
+#include <linux/kernel_api_spec.h>
+#include <linux/syscall_api_spec.h>
 
 #include "blk.h"
 
@@ -234,6 +236,29 @@ static ssize_t flag_show(struct device *dev, char *page, unsigned char flag)
 	return sysfs_emit(page, "%d\n", !(bi->flags & flag));
 }
 
+/*
+ * Sysfs API specifications for integrity attributes
+ */
+DEFINE_SYSFS_API_SPEC(format)
+	KAPI_DESCRIPTION("Metadata format for integrity")
+	KAPI_LONG_DESC("Metadata format for integrity capable block device. "
+		       "E.g. T10-DIF-TYPE1-CRC. This field describes the type of T10 "
+		       "Protection Information that the block device can send and receive. "
+		       "If the device can store application integrity metadata but "
+		       "no T10 Protection Information profile is used, this field "
+		       "contains 'nop'. If the device does not support integrity "
+		       "metadata, this field contains 'none'.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "format", "string", "Integrity metadata format")
+		KAPI_PARAM_TYPE(KAPI_TYPE_STRING)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/integrity/format")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/integrity/format")
+KAPI_END_SPEC;
+
 static ssize_t format_show(struct device *dev, struct device_attribute *attr,
 			   char *page)
 {
@@ -244,6 +269,33 @@ static ssize_t format_show(struct device *dev, struct device_attribute *attr,
 	return sysfs_emit(page, "%s\n", blk_integrity_profile_name(bi));
 }
 
+DEFINE_SYSFS_API_SPEC(tag_size)
+	KAPI_DESCRIPTION("Integrity tag size")
+	KAPI_LONG_DESC("Number of bytes of integrity tag space available per "
+		       "protection_interval_bytes, which is typically "
+		       "the device's logical block size. "
+		       "This field describes the size of the application tag "
+		       "if the storage device is formatted with T10 Protection "
+		       "Information and permits use of the application tag.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "tag_size", "unsigned int", "Tag size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/integrity/tag_size")
+		KAPI_PARAM_RANGE(0, 65535)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/integrity/tag_size")
+	KAPI_NOTES("If the device does not support T10 Protection Information (even if the "
+		   "device provides application integrity metadata space), this field is set to 0. "
+		   "The owner of this tag space is the owner of the block device. The filesystem "
+		   "can use this extra space to tag sectors as they see fit. Because the tag space "
+		   "is limited, the block interface allows tagging bigger chunks by way of interleaving. "
+		   "This way, 8*16 bits of information can be attached to a typical 4KB filesystem block.")
+KAPI_END_SPEC;
+
 static ssize_t tag_size_show(struct device *dev, struct device_attribute *attr,
 			     char *page)
 {
@@ -251,6 +303,26 @@ static ssize_t tag_size_show(struct device *dev, struct device_attribute *attr,
 
 	return sysfs_emit(page, "%u\n", bi->tag_size);
 }
+
+DEFINE_SYSFS_API_SPEC(protection_interval_bytes)
+	KAPI_DESCRIPTION("Protection interval size")
+	KAPI_LONG_DESC("Describes the number of data bytes which are protected by one "
+		       "integrity tuple. Typically the device's logical block size. "
+		       "For example, a 512-byte sector with 8-byte integrity metadata "
+		       "would have a protection interval of 512 bytes.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "protection_interval_bytes", "unsigned int", "Protection interval in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/integrity/protection_interval_bytes")
+		KAPI_PARAM_RANGE(0, 65536)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/integrity/protection_interval_bytes")
+	KAPI_NOTES("This is typically the same as the device's logical block size")
+KAPI_END_SPEC;
 
 static ssize_t protection_interval_bytes_show(struct device *dev,
 					      struct device_attribute *attr,
@@ -275,6 +347,25 @@ static ssize_t read_verify_show(struct device *dev,
 	return flag_show(dev, page, BLK_INTEGRITY_NOVERIFY);
 }
 
+DEFINE_SYSFS_API_SPEC(read_verify)
+	KAPI_DESCRIPTION("Read request integrity verification")
+	KAPI_LONG_DESC("Indicates whether the block layer should verify the integrity "
+		       "of read requests serviced by devices that support sending "
+		       "integrity metadata. A value of 1 enables verification, while "
+		       "0 disables it. When enabled, the block layer will check "
+		       "integrity metadata on read operations.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "read_verify", "bool", "Enable read integrity verification")
+		KAPI_PARAM_TYPE(KAPI_TYPE_BOOL)
+		KAPI_PERMISSIONS(0644)
+		KAPI_PATH("/sys/block/<disk>/integrity/read_verify")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_RW)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("echo 1 > /sys/block/sda/integrity/read_verify")
+	KAPI_NOTES("This attribute only has effect if the device supports integrity metadata")
+KAPI_END_SPEC;
+
 static ssize_t write_generate_store(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *page, size_t count)
@@ -287,6 +378,46 @@ static ssize_t write_generate_show(struct device *dev,
 {
 	return flag_show(dev, page, BLK_INTEGRITY_NOGENERATE);
 }
+
+DEFINE_SYSFS_API_SPEC(write_generate)
+	KAPI_DESCRIPTION("Write request integrity generation")
+	KAPI_LONG_DESC("Indicates whether the block layer should automatically generate "
+		       "checksums for write requests bound for devices that support "
+		       "receiving integrity metadata. A value of 1 enables generation, "
+		       "while 0 disables it. When enabled, the block layer will compute "
+		       "and attach integrity metadata to write operations.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "write_generate", "bool", "Enable write integrity generation")
+		KAPI_PARAM_TYPE(KAPI_TYPE_BOOL)
+		KAPI_PERMISSIONS(0644)
+		KAPI_PATH("/sys/block/<disk>/integrity/write_generate")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_RW)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("echo 1 > /sys/block/sda/integrity/write_generate")
+	KAPI_NOTES("This attribute only has effect if the device supports integrity metadata")
+KAPI_END_SPEC;
+
+DEFINE_SYSFS_API_SPEC(device_is_integrity_capable)
+	KAPI_DESCRIPTION("Device integrity capability")
+	KAPI_LONG_DESC("Indicates whether a storage device is capable of storing "
+		       "integrity metadata. Set if the device is T10 PI-capable. "
+		       "This flag is set to 1 if the storage media is formatted "
+		       "with T10 Protection Information. If the storage media is "
+		       "not formatted with T10 Protection Information, this flag "
+		       "is set to 0. This is a key indicator for whether the device "
+		       "supports end-to-end data protection using standards like "
+		       "T10 DIF (Data Integrity Field) for SCSI devices.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "device_is_integrity_capable", "bool", "Device integrity capability flag")
+		KAPI_PARAM_TYPE(KAPI_TYPE_BOOL)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/integrity/device_is_integrity_capable")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/integrity/device_is_integrity_capable")
+KAPI_END_SPEC;
 
 static ssize_t device_is_integrity_capable_show(struct device *dev,
 						struct device_attribute *attr,

@@ -26,6 +26,8 @@
 #include <linux/badblocks.h>
 #include <linux/part_stat.h>
 #include <linux/blktrace_api.h>
+#include <linux/kernel_api_spec.h>
+#include <linux/syscall_api_spec.h>
 
 #include "blk-throttle.h"
 #include "blk.h"
@@ -1104,6 +1106,25 @@ ssize_t part_stat_show(struct device *dev,
  * For bio-based device, started from bdev_start_io_acct();
  * For rq-based device, started from blk_mq_start_request();
  */
+DEFINE_SYSFS_API_SPEC(inflight)
+	KAPI_DESCRIPTION("I/O requests in progress")
+	KAPI_LONG_DESC("Reports the number of I/O requests currently in progress "
+		       "(pending / in flight) in a device driver. This can be less "
+		       "than the number of requests queued in the block device queue. "
+		       "The report contains 2 fields: one for read requests "
+		       "and one for write requests.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "inflight", "string", "Two unsigned integers: read and write requests in flight")
+		KAPI_PARAM_TYPE(KAPI_TYPE_STRING)
+		KAPI_PATH("/sys/block/<disk>/inflight")
+		KAPI_PERMISSIONS(0444)
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/inflight")
+	KAPI_NOTES("The value type is unsigned int. Related to /sys/block/<disk>/queue/nr_requests")
+KAPI_END_SPEC;
+
 ssize_t part_inflight_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
@@ -1123,6 +1144,28 @@ static ssize_t disk_capability_show(struct device *dev,
 	return sysfs_emit(buf, "0\n");
 }
 
+/*
+ * Sysfs API specifications for disk attributes
+ */
+DEFINE_SYSFS_API_SPEC(alignment_offset)
+	KAPI_DESCRIPTION("Physical block alignment offset")
+	KAPI_LONG_DESC("Storage devices may report a physical block size that is "
+		       "bigger than the logical block size. This parameter "
+		       "indicates how many bytes the beginning of the device is "
+		       "offset from the disk's natural alignment.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "alignment_offset", "int", "Alignment offset in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_INT)
+		KAPI_PATH("/sys/block/<disk>/alignment_offset")
+		KAPI_PERMISSIONS(0444)
+		KAPI_PARAM_RANGE(0, INT_MAX)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/alignment_offset")
+KAPI_END_SPEC;
+
 static ssize_t disk_alignment_offset_show(struct device *dev,
 					  struct device_attribute *attr,
 					  char *buf)
@@ -1131,6 +1174,27 @@ static ssize_t disk_alignment_offset_show(struct device *dev,
 
 	return sysfs_emit(buf, "%d\n", bdev_alignment_offset(disk->part0));
 }
+
+DEFINE_SYSFS_API_SPEC(discard_alignment)
+	KAPI_DESCRIPTION("Discard alignment offset")
+	KAPI_LONG_DESC("Devices that support discard functionality may "
+		       "internally allocate space in units that are bigger than "
+		       "the exported logical block size. The discard_alignment "
+		       "parameter indicates how many bytes the beginning of the "
+		       "device is offset from the internal allocation unit's "
+		       "natural alignment.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "discard_alignment", "int", "Discard alignment offset in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_INT)
+		KAPI_PATH("/sys/block/<disk>/discard_alignment")
+		KAPI_PERMISSIONS(0444)
+		KAPI_PARAM_RANGE(0, INT_MAX)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/discard_alignment")
+KAPI_END_SPEC;
 
 static ssize_t disk_discard_alignment_show(struct device *dev,
 					   struct device_attribute *attr,
@@ -1141,6 +1205,25 @@ static ssize_t disk_discard_alignment_show(struct device *dev,
 	return sysfs_emit(buf, "%d\n", bdev_alignment_offset(disk->part0));
 }
 
+DEFINE_SYSFS_API_SPEC(diskseq)
+	KAPI_DESCRIPTION("Disk sequence number")
+	KAPI_LONG_DESC("The diskseq attribute reports the disk sequence number, "
+		       "which is a monotonically increasing number assigned to "
+		       "every drive. Some devices, like the loop device, refresh "
+		       "this number every time the backing file is changed.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "diskseq", "uint64_t", "64-bit disk sequence number")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/diskseq")
+		KAPI_PARAM_RANGE(0, ULLONG_MAX)
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/diskseq")
+	KAPI_NOTES("Value type is 64 bit unsigned")
+KAPI_END_SPEC;
+
 static ssize_t diskseq_show(struct device *dev,
 			    struct device_attribute *attr, char *buf)
 {
@@ -1148,6 +1231,22 @@ static ssize_t diskseq_show(struct device *dev,
 
 	return sysfs_emit(buf, "%llu\n", disk->diskseq);
 }
+
+DEFINE_SYSFS_API_SPEC(partscan)
+	KAPI_DESCRIPTION("Partition scanning status")
+	KAPI_LONG_DESC("Reports if partition scanning is enabled for the disk. "
+		       "Returns '1' if partition scanning is enabled, or '0' if not.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "partscan", "bool", "Partition scanning enabled flag")
+		KAPI_PARAM_TYPE(KAPI_TYPE_BOOL)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/partscan")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/partscan")
+	KAPI_NOTES("The value type is a 32-bit unsigned integer, but only '0' and '1' are valid values")
+KAPI_END_SPEC;
 
 static ssize_t partscan_show(struct device *dev,
 		struct device_attribute *attr, char *buf)

@@ -10,6 +10,8 @@
 #include <linux/backing-dev.h>
 #include <linux/blktrace_api.h>
 #include <linux/debugfs.h>
+#include <linux/kernel_api_spec.h>
+#include <linux/syscall_api_spec.h>
 
 #include "blk.h"
 #include "blk-mq.h"
@@ -51,6 +53,31 @@ queue_var_store(unsigned long *var, const char *page, size_t count)
 	return count;
 }
 
+DEFINE_SYSFS_API_SPEC(nr_requests)
+	KAPI_DESCRIPTION("Number of allocatable requests")
+	KAPI_LONG_DESC("This controls how many requests may be allocated in the "
+		       "block layer for read or write requests. Note that the total "
+		       "allocated number may be twice this amount, since it applies only "
+		       "to reads or writes (not the accumulated sum). "
+		       "When CONFIG_BLK_CGROUP is enabled, each request queue may have "
+		       "up to N request pools for N block cgroups.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "nr_requests", "unsigned int", "Number of allocatable requests")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0644)
+		KAPI_PATH("/sys/block/<disk>/queue/nr_requests")
+		KAPI_PARAM_RANGE(BLKDEV_MIN_RQ, INT_MAX)
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_RW)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("echo 256 > /sys/block/sda/queue/nr_requests")
+	KAPI_NOTES("To avoid priority inversion through request starvation, a request queue "
+		   "maintains a separate request pool per each cgroup when CONFIG_BLK_CGROUP "
+		   "is enabled, and this parameter applies to each such per-block-cgroup "
+		   "request pool. IOW, if there are N block cgroups, each request queue may "
+		   "have up to N request pools, each independently regulated by nr_requests.")
+KAPI_END_SPEC;
+
 static ssize_t queue_requests_show(struct gendisk *disk, char *page)
 {
 	ssize_t ret;
@@ -89,6 +116,29 @@ queue_requests_store(struct gendisk *disk, const char *page, size_t count)
 	return ret;
 }
 
+DEFINE_SYSFS_API_SPEC(read_ahead_kb)
+	KAPI_DESCRIPTION("Read-ahead size")
+	KAPI_LONG_DESC("Maximum number of kilobytes to read-ahead for filesystems "
+		       "on this block device. For MADV_HUGEPAGE, the readahead size "
+		       "may exceed this setting since its granularity is based on the "
+		       "hugepage size.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "read_ahead_kb", "unsigned int", "Read-ahead size in kilobytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0644)
+		KAPI_PATH("/sys/block/<disk>/queue/read_ahead_kb")
+		KAPI_PARAM_RANGE(0, ULONG_MAX >> (PAGE_SHIFT - 10))
+		KAPI_UNITS("kilobytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_RW)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("echo 128 > /sys/block/sda/queue/read_ahead_kb")
+	KAPI_NOTES("128 KB for each device is a good starting point, but increasing to "
+		   "4-8 MB might improve performance in environments where sequential "
+		   "reading of large files takes place. Changes are not persistent "
+		   "across reboots unless saved in startup scripts.")
+KAPI_END_SPEC;
+
 static ssize_t queue_ra_show(struct gendisk *disk, char *page)
 {
 	ssize_t ret;
@@ -124,6 +174,62 @@ queue_ra_store(struct gendisk *disk, const char *page, size_t count)
 	return ret;
 }
 
+/*
+ * Sysfs API specifications for queue attributes
+ */
+DEFINE_SYSFS_API_SPEC(logical_block_size)
+	KAPI_DESCRIPTION("Logical block size")
+	KAPI_LONG_DESC("This is the smallest unit the storage device can address. "
+		       "It is typically 512 bytes.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "logical_block_size", "unsigned int", "Logical block size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PATH("/sys/block/<disk>/queue/logical_block_size")
+		KAPI_PERMISSIONS(0444)
+		KAPI_PARAM_RANGE(512, 4096)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/queue/logical_block_size")
+KAPI_END_SPEC;
+
+DEFINE_SYSFS_API_SPEC(physical_block_size)
+	KAPI_DESCRIPTION("Physical block size")
+	KAPI_LONG_DESC("This is the smallest unit a physical storage device can "
+		       "write atomically. It is usually the same as the logical block "
+		       "size but may be bigger. One example is SATA drives with 4KB "
+		       "sectors that expose a 512-byte logical block size to the "
+		       "operating system.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "physical_block_size", "unsigned int", "Physical block size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/physical_block_size")
+		KAPI_PARAM_RANGE(512, 4194304)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/queue/physical_block_size")
+KAPI_END_SPEC;
+
+DEFINE_SYSFS_API_SPEC(hw_sector_size)
+	KAPI_DESCRIPTION("Hardware sector size")
+	KAPI_LONG_DESC("This is the hardware sector size of the device, in bytes.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "hw_sector_size", "unsigned int", "Hardware sector size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/hw_sector_size")
+		KAPI_PARAM_RANGE(512, 4194304)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/queue/hw_sector_size")
+KAPI_END_SPEC;
+
 #define QUEUE_SYSFS_LIMIT_SHOW(_field)					\
 static ssize_t queue_##_field##_show(struct gendisk *disk, char *page)	\
 {									\
@@ -147,7 +253,53 @@ QUEUE_SYSFS_LIMIT_SHOW(virt_boundary_mask)
 QUEUE_SYSFS_LIMIT_SHOW(dma_alignment)
 QUEUE_SYSFS_LIMIT_SHOW(max_open_zones)
 QUEUE_SYSFS_LIMIT_SHOW(max_active_zones)
+DEFINE_SYSFS_API_SPEC(atomic_write_unit_min_bytes)
+	KAPI_DESCRIPTION("Minimum atomic write unit size")
+	KAPI_LONG_DESC("This parameter specifies the smallest block which can "
+		       "be written atomically with an atomic write operation. All "
+		       "atomic write operations must begin at a "
+		       "atomic_write_unit_min boundary and must be multiples of "
+		       "atomic_write_unit_min. This value must be a power-of-two.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "atomic_write_unit_min_bytes", "unsigned int", "Minimum atomic write unit size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/atomic_write_unit_min_bytes")
+		KAPI_PARAM_RANGE(0, ULLONG_MAX)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/nvme0n1/queue/atomic_write_unit_min_bytes")
+	KAPI_NOTES("This value must be a power-of-two. All atomic write operations must "
+		   "begin at a atomic_write_unit_min boundary and must be multiples of "
+		   "atomic_write_unit_min.")
+KAPI_END_SPEC;
+
 QUEUE_SYSFS_LIMIT_SHOW(atomic_write_unit_min)
+
+DEFINE_SYSFS_API_SPEC(atomic_write_unit_max_bytes)
+	KAPI_DESCRIPTION("Maximum atomic write unit size")
+	KAPI_LONG_DESC("This parameter defines the largest block which can be "
+		       "written atomically with an atomic write operation. This "
+		       "value must be a multiple of atomic_write_unit_min and must "
+		       "be a power-of-two. This value will not be larger than "
+		       "atomic_write_max_bytes.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "atomic_write_unit_max_bytes", "unsigned int", "Maximum atomic write unit size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/atomic_write_unit_max_bytes")
+		KAPI_PARAM_RANGE(0, ULLONG_MAX)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/nvme0n1/queue/atomic_write_unit_max_bytes")
+	KAPI_NOTES("This value must be a multiple of atomic_write_unit_min and must be a "
+		   "power-of-two. This value will not be larger than atomic_write_max_bytes.")
+KAPI_END_SPEC;
+
 QUEUE_SYSFS_LIMIT_SHOW(atomic_write_unit_max)
 
 #define QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(_field)			\
@@ -161,7 +313,60 @@ static ssize_t queue_##_field##_show(struct gendisk *disk, char *page)	\
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(max_discard_sectors)
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(max_hw_discard_sectors)
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(max_write_zeroes_sectors)
+
+DEFINE_SYSFS_API_SPEC(atomic_write_max_bytes)
+	KAPI_DESCRIPTION("Maximum atomic write size")
+	KAPI_LONG_DESC("This parameter specifies the maximum atomic write "
+		       "size reported by the device. This parameter is relevant "
+		       "for merging of writes, where a merged atomic write "
+		       "operation must not exceed this number of bytes. "
+		       "This parameter may be greater than atomic_write_unit_max_bytes.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "atomic_write_max_bytes", "unsigned int", "Maximum atomic write size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/atomic_write_max_bytes")
+		KAPI_PARAM_RANGE(0, ULLONG_MAX)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/nvme0n1/queue/atomic_write_max_bytes")
+	KAPI_NOTES("This parameter is relevant for merging of writes, where a merged atomic "
+		   "write operation must not exceed this number of bytes. May be greater than "
+		   "atomic_write_unit_max_bytes as atomic_write_unit_max_bytes will be rounded "
+		   "down to a power-of-two and may also be limited by other queue limits such "
+		   "as max_segments. Will not be larger than max_hw_sectors_kb.")
+KAPI_END_SPEC;
+
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(atomic_write_max_sectors)
+
+DEFINE_SYSFS_API_SPEC(atomic_write_boundary_bytes)
+	KAPI_DESCRIPTION("Atomic write boundary size")
+	KAPI_LONG_DESC("A device may need to internally split an atomic write I/O "
+		       "which straddles a given logical block address boundary. This "
+		       "parameter specifies the size in bytes of the atomic boundary if "
+		       "one is reported by the device. This value must be a "
+		       "power-of-two and at least the size as in "
+		       "atomic_write_unit_max_bytes.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "atomic_write_boundary_bytes", "unsigned int", "Atomic write boundary size in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/atomic_write_boundary_bytes")
+		KAPI_PARAM_RANGE(0, ULLONG_MAX)
+		KAPI_UNITS("bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/nvme0n1/queue/atomic_write_boundary_bytes")
+	KAPI_NOTES("A device may need to internally split an atomic write I/O which straddles "
+		   "a given logical block address boundary. This specifies the size in bytes of "
+		   "the atomic boundary if one is reported by the device. Must be a power-of-two "
+		   "and at least the size as in atomic_write_unit_max_bytes. Any attempt to merge "
+		   "atomic write I/Os must not result in a merged I/O which crosses this boundary.")
+KAPI_END_SPEC;
+
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(atomic_write_boundary_sectors)
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_BYTES(max_zone_append_sectors)
 
@@ -171,7 +376,45 @@ static ssize_t queue_##_field##_show(struct gendisk *disk, char *page)	\
 	return queue_var_show(disk->queue->limits._field >> 1, page);	\
 }
 
+DEFINE_SYSFS_API_SPEC(max_sectors_kb)
+	KAPI_DESCRIPTION("Maximum request size (software limit)")
+	KAPI_LONG_DESC("This is the maximum number of kilobytes that the block "
+		       "layer will allow for a filesystem request. Must be smaller than "
+		       "or equal to the maximum size allowed by the hardware. Write 0 "
+		       "to use default kernel settings.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "max_sectors_kb", "unsigned int", "Maximum request size in kilobytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0644)
+		KAPI_PATH("/sys/block/<disk>/queue/max_sectors_kb")
+		KAPI_PARAM_RANGE(0, UINT_MAX)
+		KAPI_UNITS("kilobytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_RW)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("echo 512 > /sys/block/sda/queue/max_sectors_kb")
+	KAPI_NOTES("Must be <= max_hw_sectors_kb")
+KAPI_END_SPEC;
+
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_KB(max_sectors)
+
+DEFINE_SYSFS_API_SPEC(max_hw_sectors_kb)
+	KAPI_DESCRIPTION("Maximum request size (hardware limit)")
+	KAPI_LONG_DESC("This is the maximum number of kilobytes supported in a "
+		       "single data transfer.")
+	KAPI_PARAM_COUNT(1)
+	KAPI_PARAM(0, "max_hw_sectors_kb", "unsigned int", "Maximum hardware request size in kilobytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PERMISSIONS(0444)
+		KAPI_PATH("/sys/block/<disk>/queue/max_hw_sectors_kb")
+		KAPI_PARAM_RANGE(0, UINT_MAX)
+		KAPI_UNITS("kilobytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_SYSFS_READONLY)
+	KAPI_PARAM_END
+	KAPI_SUBSYSTEM("block")
+	KAPI_EXAMPLES("cat /sys/block/sda/queue/max_hw_sectors_kb")
+KAPI_END_SPEC;
+
 QUEUE_SYSFS_LIMIT_SHOW_SECTORS_TO_KB(max_hw_sectors)
 
 #define QUEUE_SYSFS_SHOW_CONST(_name, _val)				\
