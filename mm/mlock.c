@@ -25,6 +25,7 @@
 #include <linux/memcontrol.h>
 #include <linux/mm_inline.h>
 #include <linux/secretmem.h>
+#include <linux/syscall_api_spec.h>
 
 #include "internal.h"
 
@@ -657,6 +658,147 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 		return __mlock_posix_error_return(error);
 	return 0;
 }
+
+
+DEFINE_KERNEL_API_SPEC(sys_mlock)
+	KAPI_DESCRIPTION("Lock pages in memory")
+	KAPI_LONG_DESC("Locks pages in the specified address range into RAM, "
+		       "preventing them from being paged to swap. Requires "
+		       "CAP_IPC_LOCK capability or RLIMIT_MEMLOCK resource limit.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	KAPI_PARAM(0, "start", "unsigned long", "Starting address of memory range to lock")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_NONE)
+		KAPI_PARAM_CONSTRAINT("Rounded down to page boundary")
+	KAPI_PARAM_END
+	KAPI_PARAM(1, "len", "size_t", "Length of memory range to lock in bytes")
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_RANGE(0, LONG_MAX)
+		KAPI_PARAM_CONSTRAINT("Rounded up to page boundary")
+	KAPI_PARAM_END
+
+	KAPI_RETURN("long", "0 on success, negative error code on failure")
+		KAPI_RETURN_TYPE(KAPI_TYPE_INT)
+		KAPI_RETURN_CHECK_TYPE(KAPI_RETURN_ERROR_CHECK)
+		KAPI_RETURN_SUCCESS(0)
+	KAPI_RETURN_END
+
+	KAPI_ERROR(0, -ENOMEM, "ENOMEM", "Address range issue",
+		   "Some of the specified range is not mapped, has unmapped gaps, "
+		   "or the lock would cause the number of mapped regions to exceed the limit.")
+	KAPI_ERROR(1, -EPERM, "EPERM", "Insufficient privileges",
+		   "The caller is not privileged (no CAP_IPC_LOCK) and RLIMIT_MEMLOCK is 0.")
+	KAPI_ERROR(2, -EINVAL, "EINVAL", "Address overflow",
+		   "The result of the addition start+len was less than start (arithmetic overflow).")
+	KAPI_ERROR(3, -EAGAIN, "EAGAIN", "Some or all memory could not be locked",
+		   "Some or all of the specified address range could not be locked.")
+	KAPI_ERROR(4, -EINTR, "EINTR", "Interrupted by signal",
+		   "The operation was interrupted by a fatal signal before completion.")
+
+	KAPI_ERROR_COUNT(5)
+	KAPI_PARAM_COUNT(2)
+	KAPI_SINCE_VERSION("2.0")
+
+	KAPI_LOCK(0, "mmap_lock", KAPI_LOCK_RWLOCK)
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Process memory map write lock")
+	KAPI_LOCK_END
+
+	KAPI_LOCK_COUNT(1)
+
+	/* Signal specifications */
+	KAPI_SIGNAL_COUNT(1)
+
+	/* Fatal signals can interrupt mmap_write_lock_killable */
+	KAPI_SIGNAL(0, 0, "FATAL", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Fatal signal pending")
+		KAPI_SIGNAL_DESC("Fatal signals (SIGKILL, etc.) can interrupt the operation "
+				 "when acquiring mmap_write_lock_killable(), causing -EINTR return")
+	KAPI_SIGNAL_END
+
+	KAPI_EXAMPLES("mlock(addr, 4096);  // Lock one page\n"
+		      "mlock(addr, len);   // Lock range of pages")
+	KAPI_NOTES("Memory locks do not stack - multiple calls on the same range can be "
+		   "undone by a single munlock. Locks are not inherited by child processes. "
+		   "Pages are locked on whole page boundaries. Commonly used by real-time "
+		   "applications to prevent page faults during time-critical operations. "
+		   "Also used for security to prevent sensitive data (e.g., cryptographic keys) "
+		   "from being written to swap. Note: locked pages may still be saved to "
+		   "swap during system suspend/hibernate.")
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_MODIFY_STATE | KAPI_EFFECT_ALLOC_MEMORY,
+			 "process memory",
+			 "Locks pages into physical memory, preventing swapping")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE,
+			 "mm->locked_vm",
+			 "Increases process locked memory counter")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_ALLOC_MEMORY,
+			 "physical pages",
+			 "May allocate and populate page table entries")
+		KAPI_EFFECT_CONDITION("Pages not already present")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(3)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "memory pages", "swappable", "locked in RAM",
+			 "Pages become non-swappable and pinned in physical memory")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "VMA flags", "unlocked", "VM_LOCKED set",
+			 "Virtual memory area marked as locked")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(2)
+
+	/* Capability specifications */
+	KAPI_CAPABILITY(0, CAP_IPC_LOCK, "CAP_IPC_LOCK", KAPI_CAP_BYPASS_CHECK)
+		KAPI_CAP_ALLOWS("Lock unlimited amount of memory (no RLIMIT_MEMLOCK enforcement)")
+		KAPI_CAP_WITHOUT("Must respect RLIMIT_MEMLOCK resource limit")
+		KAPI_CAP_CONDITION("Checked when RLIMIT_MEMLOCK is 0 or locking would exceed limit")
+		KAPI_CAP_PRIORITY(0)
+	KAPI_CAPABILITY_END
+
+	KAPI_CAPABILITY_COUNT(1)
+
+	/* Additional constraints */
+	KAPI_CONSTRAINT(0, "RLIMIT_MEMLOCK Resource Limit",
+			"The RLIMIT_MEMLOCK soft resource limit specifies the maximum bytes "
+			"of memory that may be locked into RAM. Unprivileged processes are "
+			"restricted to this limit. CAP_IPC_LOCK capability allows bypassing "
+			"this limit entirely. The limit is enforced per-process, not per-user.")
+		KAPI_CONSTRAINT_EXPR("locked_memory + request_size <= RLIMIT_MEMLOCK || CAP_IPC_LOCK")
+	KAPI_CONSTRAINT_END
+
+	KAPI_CONSTRAINT(1, "Memory Pressure and OOM",
+			"Locking large amounts of memory can cause system-wide memory pressure "
+			"and potentially trigger the OOM killer. The kernel does not prevent "
+			"locking memory that would destabilize the system.")
+	KAPI_CONSTRAINT_END
+
+	KAPI_CONSTRAINT(2, "Special Memory Areas",
+			"Some memory types cannot be locked or behave specially: "
+			"VM_IO/VM_PFNMAP areas fail with EINVAL; "
+			"Hugetlb pages are inherently pinned; "
+			"DAX mappings are always present in memory; "
+			"VM_LOCKED areas are already locked.")
+	KAPI_CONSTRAINT_END
+
+	KAPI_CONSTRAINT_COUNT(3)
+
+KAPI_END_SPEC;
 
 SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
 {
