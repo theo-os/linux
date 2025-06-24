@@ -1049,6 +1049,192 @@ out:
 	return 0;
 }
 
+
+DEFINE_KERNEL_API_SPEC(sys_mlockall)
+	KAPI_DESCRIPTION("Lock all process pages in memory")
+	KAPI_LONG_DESC("Locks all pages mapped into the process address space. "
+		       "MCL_CURRENT locks current pages, MCL_FUTURE locks future mappings, "
+		       "MCL_ONFAULT defers locking until page fault.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	/* Parameters */
+	KAPI_PARAM(0, "flags", "int", "Flags controlling which pages to lock")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_INT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_MASK)
+		.valid_mask = MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT,
+		KAPI_PARAM_CONSTRAINT("Must specify MCL_CURRENT and/or MCL_FUTURE; MCL_ONFAULT can be OR'd")
+	KAPI_PARAM_END
+
+	/* Return specification */
+	KAPI_RETURN("long", "0 on success, negative error code on failure")
+		.type = KAPI_TYPE_INT,
+		.check_type = KAPI_RETURN_ERROR_CHECK,
+		.success_value = 0,
+	KAPI_RETURN_END
+
+	/* Error codes */
+	KAPI_ERROR(0, -EINVAL, "EINVAL", "Invalid flags", "Invalid combination of flags specified, or no flags set, or only MCL_ONFAULT without MCL_CURRENT or MCL_FUTURE.")
+	KAPI_ERROR(1, -EPERM, "EPERM", "Insufficient privileges", "The caller is not privileged (no CAP_IPC_LOCK) and RLIMIT_MEMLOCK is 0.")
+	KAPI_ERROR(2, -ENOMEM, "ENOMEM", "Insufficient resources", "MCL_CURRENT is set and total VM size exceeds RLIMIT_MEMLOCK and caller lacks CAP_IPC_LOCK.")
+	KAPI_ERROR(3, -EINTR, "EINTR", "Interrupted by signal", "The operation was interrupted by a signal before completion.")
+	KAPI_ERROR(4, -EAGAIN, "EAGAIN", "Some memory could not be locked", "Some pages could not be locked, possibly due to memory pressure.")
+
+	/* Signal specifications */
+	KAPI_SIGNAL(0, 0, "FATAL_SIGNALS", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Fatal signal pending during mmap_write_lock_killable")
+		KAPI_SIGNAL_DESC("Fatal signals (SIGKILL, SIGTERM, etc.) can interrupt the operation when acquiring mmap_write_lock_killable(), causing -EINTR return")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(1, SIGBUS, "SIGBUS", KAPI_SIGNAL_SEND, KAPI_SIGNAL_ACTION_DEFAULT)
+		KAPI_SIGNAL_TARGET("Current process")
+		KAPI_SIGNAL_CONDITION("Memory access to locked page fails")
+		KAPI_SIGNAL_DESC("Can be generated later if accessing a locked page that cannot be brought into memory (e.g., truncated file mapping)")
+	KAPI_SIGNAL_END
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_MODIFY_STATE | KAPI_EFFECT_ALLOC_MEMORY,
+			 "all process memory",
+			 "Locks all current pages into physical memory, preventing swapping")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("MCL_CURRENT flag set")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE,
+			 "mm->def_flags",
+			 "Sets VM_LOCKED in default flags for future mappings")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("MCL_FUTURE flag set")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_MODIFY_STATE,
+			 "mm->locked_vm",
+			 "Increases process locked memory counter for entire address space")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("MCL_CURRENT flag set")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(3, KAPI_EFFECT_ALLOC_MEMORY,
+			 "page tables",
+			 "May allocate and populate page table entries for all mappings")
+		KAPI_EFFECT_CONDITION("MCL_CURRENT without MCL_ONFAULT")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(4, KAPI_EFFECT_MODIFY_STATE,
+			 "VMA flags",
+			 "Sets VM_LOCKED on all existing VMAs")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("MCL_CURRENT flag set")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(5, KAPI_EFFECT_SCHEDULE,
+			 "mm_populate",
+			 "Triggers population of entire address space")
+		KAPI_EFFECT_CONDITION("MCL_CURRENT without MCL_ONFAULT")
+	KAPI_SIDE_EFFECT_END
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "all memory pages",
+			 "swappable", "locked in RAM",
+			 "All pages in process become non-swappable")
+		KAPI_STATE_TRANS_COND("MCL_CURRENT flag set")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "future mappings",
+			 "normal", "auto-locked",
+			 "New mappings will be automatically locked")
+		KAPI_STATE_TRANS_COND("MCL_FUTURE flag set")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(2, "VMA flags",
+			 "varied", "all VM_LOCKED",
+			 "All virtual memory areas marked as locked")
+		KAPI_STATE_TRANS_COND("MCL_CURRENT flag set")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(3, "page fault behavior",
+			 "normal faulting", "lock on fault",
+			 "Pages locked when faulted in rather than immediately")
+		KAPI_STATE_TRANS_COND("MCL_ONFAULT flag set")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(4, "process statistics",
+			 "partial locked memory", "all memory locked",
+			 "Entire VM size counted against RLIMIT_MEMLOCK")
+		KAPI_STATE_TRANS_COND("MCL_CURRENT flag set")
+	KAPI_STATE_TRANS_END
+
+	/* Locking information */
+	KAPI_LOCK(0, "mmap_lock", KAPI_LOCK_RWLOCK)
+		KAPI_LOCK_DESC("Process memory map write lock")
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Protects VMA modifications during mlockall operation")
+	KAPI_LOCK_END
+
+	KAPI_LOCK(1, "lru_lock", KAPI_LOCK_SPINLOCK)
+		KAPI_LOCK_DESC("Per-memcg LRU list lock")
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Taken when moving pages to unevictable list for all locked pages")
+	KAPI_LOCK_END
+
+	KAPI_ERROR_COUNT(5)
+	KAPI_PARAM_COUNT(1)
+	KAPI_SINCE_VERSION("2.0")
+	KAPI_SIGNAL_COUNT(2)
+	KAPI_SIDE_EFFECT_COUNT(6)
+	KAPI_STATE_TRANS_COUNT(5)
+	KAPI_LOCK_COUNT(2)
+
+	/* Capability specifications */
+	KAPI_CAPABILITY(0, CAP_IPC_LOCK, "CAP_IPC_LOCK", KAPI_CAP_BYPASS_CHECK)
+		KAPI_CAP_ALLOWS("Lock entire process memory exceeding RLIMIT_MEMLOCK")
+		KAPI_CAP_WITHOUT("Total VM size must not exceed RLIMIT_MEMLOCK when MCL_CURRENT is set")
+		KAPI_CAP_CONDITION("Checked when MCL_CURRENT is set and total VM size exceeds RLIMIT_MEMLOCK")
+		KAPI_CAP_PRIORITY(0)
+	KAPI_CAPABILITY_END
+
+	KAPI_CAPABILITY_COUNT(1)
+
+	KAPI_EXAMPLES("mlockall(MCL_CURRENT);                    // Lock current mappings\n"
+		      "mlockall(MCL_CURRENT | MCL_FUTURE);       // Lock current and future\n"
+		      "mlockall(MCL_CURRENT | MCL_ONFAULT);      // Lock current on fault")
+	KAPI_NOTES("Affects all current VMAs and optionally future mappings via mm->def_flags. "
+		   "Memory locks are not inherited by child processes after fork(). Commonly used "
+		   "by real-time applications to prevent page faults. Also used for security to "
+		   "prevent sensitive data (e.g., cryptographic keys) from being written to swap. "
+		   "Note: locked pages may still be saved to swap during system suspend/hibernate.")
+
+	/* Additional constraints */
+	KAPI_CONSTRAINT(0, "MCL_FUTURE Persistence",
+			"The MCL_FUTURE flag persists across execve() calls by setting "
+			"mm->def_flags. This means all future memory mappings in the new "
+			"program will be locked. Care must be taken as this can cause "
+			"unexpected memory exhaustion in executed programs.")
+		KAPI_CONSTRAINT_EXPR("MCL_FUTURE => mm->def_flags |= VM_LOCKED")
+	KAPI_CONSTRAINT_END
+
+	KAPI_CONSTRAINT(1, "Total VM Size Limit",
+			"When MCL_CURRENT is set, the total virtual memory size of the "
+			"process is checked against RLIMIT_MEMLOCK. This differs from "
+			"mlock() which only counts actually locked pages. CAP_IPC_LOCK "
+			"bypasses this check entirely.")
+		KAPI_CONSTRAINT_EXPR("(flags & MCL_CURRENT) => total_vm <= RLIMIT_MEMLOCK || CAP_IPC_LOCK")
+	KAPI_CONSTRAINT_END
+
+	KAPI_CONSTRAINT(2, "Memory Accounting",
+			"mlockall() with MCL_CURRENT can lock significantly more memory "
+			"than expected, including all shared libraries, heap, stack, and "
+			"mapped files. This can easily exhaust memory limits or cause "
+			"system-wide memory pressure.")
+	KAPI_CONSTRAINT_END
+
+	KAPI_CONSTRAINT_COUNT(3)
+
+KAPI_END_SPEC;
+
 SYSCALL_DEFINE1(mlockall, int, flags)
 {
 	unsigned long lock_limit;
