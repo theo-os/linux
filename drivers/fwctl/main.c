@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/kernel_api_spec.h>
 
 #include <uapi/fwctl/fwctl.h>
 
@@ -261,12 +262,279 @@ static int fwctl_fops_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static const struct file_operations fwctl_fops = {
+/* Use KAPI_DEFINE_FOPS for automatic validation wrapping */
+KAPI_DEFINE_FOPS(fwctl_fops,
 	.owner = THIS_MODULE,
 	.open = fwctl_fops_open,
 	.release = fwctl_fops_release,
 	.unlocked_ioctl = fwctl_fops_ioctl,
-};
+);
+
+/* IOCTL API Specifications */
+
+DEFINE_KAPI_IOCTL_SPEC(fwctl_info)
+	KAPI_IOCTL_CMD(FWCTL_INFO)
+	KAPI_IOCTL_CMD_NAME("FWCTL_INFO")
+	KAPI_IOCTL_INPUT_SIZE(sizeof(struct fwctl_info))
+	KAPI_IOCTL_OUTPUT_SIZE(sizeof(struct fwctl_info))
+	KAPI_IOCTL_FILE_OPS_NAME("fwctl_fops")
+	KAPI_DESCRIPTION("Query device information and capabilities")
+	KAPI_LONG_DESC("Returns basic information about the fwctl instance, "
+		       "including the device type and driver-specific data. "
+		       "The driver-specific data format depends on the device type.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	/* Parameters */
+	KAPI_IOCTL_PARAM_SIZE
+	KAPI_IOCTL_PARAM_FLAGS
+
+	KAPI_PARAM(2, "out_device_type", "__u32", "Device type from enum fwctl_device_type")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_OUT)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_ENUM)
+		KAPI_PARAM_ENUM_VALUES(((const s64[]){FWCTL_DEVICE_TYPE_ERROR,
+						      FWCTL_DEVICE_TYPE_MLX5,
+						      FWCTL_DEVICE_TYPE_CXL,
+						      FWCTL_DEVICE_TYPE_PDS}))
+	KAPI_PARAM_END
+
+	KAPI_PARAM(3, "device_data_len", "__u32", "Length of device data buffer")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_INOUT)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_RANGE(0, SZ_1M)	/* Reasonable limit for device info */
+	KAPI_PARAM_END
+
+	KAPI_IOCTL_PARAM_USER_OUT_BUF(4, "out_device_data",
+				      "Driver-specific device data", 3)
+
+	/* Return value */
+	KAPI_RETURN("int", "0 on success, negative errno on failure")
+		KAPI_RETURN_TYPE(KAPI_TYPE_INT)
+		KAPI_RETURN_CHECK_TYPE(KAPI_RETURN_ERROR_CHECK)
+		KAPI_RETURN_ERROR_VALUES(((const s64[]){-EFAULT, -EOPNOTSUPP, -ENODEV}))
+		KAPI_RETURN_ERROR_COUNT(3)
+	KAPI_RETURN_END
+
+	/* Errors */
+	KAPI_ERROR(0, -EFAULT, "EFAULT", "Failed to copy data to/from user space",
+		   "Check that provided pointers are valid user space addresses")
+	KAPI_ERROR(1, -EOPNOTSUPP, "EOPNOTSUPP", "Invalid flags provided",
+		   "Currently flags must be 0")
+	KAPI_ERROR(2, -ENODEV, "ENODEV", "Device has been hot-unplugged",
+		   "The underlying device is no longer available")
+
+	KAPI_ERROR_COUNT(3)
+	KAPI_PARAM_COUNT(5)
+	KAPI_SINCE_VERSION("6.13")
+
+	/* Structure specifications */
+	KAPI_STRUCT_SPEC(0, fwctl_info, "Device information query structure")
+		KAPI_STRUCT_SIZE(sizeof(struct fwctl_info), __alignof__(struct fwctl_info))
+		KAPI_STRUCT_FIELD_COUNT(4)
+
+		KAPI_STRUCT_FIELD(0, "size", KAPI_TYPE_UINT, "__u32",
+				  "Structure size for versioning")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_info, size))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(1, "flags", KAPI_TYPE_UINT, "__u32",
+				  "Must be 0, reserved for future use")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_info, flags))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+			KAPI_FIELD_CONSTRAINT_RANGE(0, 0)
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(2, "out_device_type", KAPI_TYPE_UINT, "__u32",
+				  "Device type identifier")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_info, out_device_type))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(3, "device_data_len", KAPI_TYPE_UINT, "__u32",
+				  "Length of device-specific data")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_info, device_data_len))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+		KAPI_STRUCT_FIELD_END
+	KAPI_STRUCT_SPEC_END
+
+	KAPI_STRUCT_SPEC_COUNT(1)
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_NONE,
+			 "none",
+			 "Read-only operation with no side effects")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(1)
+
+	/* State transitions */
+	KAPI_STATE_TRANS_COUNT(0)	/* No state transitions for query operation */
+KAPI_END_SPEC;
+
+DEFINE_KAPI_IOCTL_SPEC(fwctl_rpc)
+	KAPI_IOCTL_CMD(FWCTL_RPC)
+	KAPI_IOCTL_CMD_NAME("FWCTL_RPC")
+	KAPI_IOCTL_INPUT_SIZE(sizeof(struct fwctl_rpc))
+	KAPI_IOCTL_OUTPUT_SIZE(sizeof(struct fwctl_rpc))
+	KAPI_IOCTL_FILE_OPS_NAME("fwctl_fops")
+	KAPI_DESCRIPTION("Execute a Remote Procedure Call to device firmware")
+	KAPI_LONG_DESC("Delivers an RPC to the device firmware and returns the response. "
+		       "The RPC format is device-specific and determined by out_device_type "
+		       "from FWCTL_INFO. Different scopes have different permission requirements.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	/* Parameters */
+	KAPI_IOCTL_PARAM_SIZE
+
+	KAPI_PARAM(1, "scope", "__u32", "Access scope from enum fwctl_rpc_scope")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_ENUM)
+		KAPI_PARAM_ENUM_VALUES(((const s64[]){FWCTL_RPC_CONFIGURATION,
+						      FWCTL_RPC_DEBUG_READ_ONLY,
+						      FWCTL_RPC_DEBUG_WRITE,
+						      FWCTL_RPC_DEBUG_WRITE_FULL}))
+		KAPI_PARAM_CONSTRAINT("FWCTL_RPC_DEBUG_WRITE_FULL requires CAP_SYS_RAWIO")
+	KAPI_PARAM_END
+
+	KAPI_PARAM(2, "in_len", "__u32", "Length of input buffer")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_RANGE(0, MAX_RPC_LEN)
+	KAPI_PARAM_END
+
+	KAPI_PARAM(3, "out_len", "__u32", "Length of output buffer")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_INOUT)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_RANGE(0, MAX_RPC_LEN)
+	KAPI_PARAM_END
+
+	KAPI_IOCTL_PARAM_USER_BUF(4, "in", "RPC request in device-specific format", 2)
+	KAPI_IOCTL_PARAM_USER_OUT_BUF(5, "out", "RPC response in device-specific format", 3)
+
+	/* Return value */
+	KAPI_RETURN("int", "0 on success, negative errno on failure")
+		KAPI_RETURN_TYPE(KAPI_TYPE_INT)
+		KAPI_RETURN_CHECK_TYPE(KAPI_RETURN_ERROR_CHECK)
+		KAPI_RETURN_ERROR_VALUES(((const s64[]){-EMSGSIZE, -EOPNOTSUPP, -EPERM,
+					      -ENOMEM, -EFAULT, -ENODEV}))
+		KAPI_RETURN_ERROR_COUNT(6)
+	KAPI_RETURN_END
+
+	/* Errors */
+	KAPI_ERROR(0, -EMSGSIZE, "EMSGSIZE", "RPC message too large",
+		   "in_len or out_len exceeds MAX_RPC_LEN (2MB)")
+	KAPI_ERROR(1, -EOPNOTSUPP, "EOPNOTSUPP", "Invalid scope value",
+		   "scope must be one of the defined fwctl_rpc_scope values")
+	KAPI_ERROR(2, -EPERM, "EPERM", "Insufficient permissions",
+		   "FWCTL_RPC_DEBUG_WRITE_FULL requires CAP_SYS_RAWIO")
+	KAPI_ERROR(3, -ENOMEM, "ENOMEM", "Memory allocation failed",
+		   "Unable to allocate buffers for RPC")
+	KAPI_ERROR(4, -EFAULT, "EFAULT", "Failed to copy data to/from user space",
+		   "Check that provided pointers are valid user space addresses")
+	KAPI_ERROR(5, -ENODEV, "ENODEV", "Device has been hot-unplugged",
+		   "The underlying device is no longer available")
+
+	KAPI_ERROR_COUNT(6)
+	KAPI_PARAM_COUNT(6)
+	KAPI_SINCE_VERSION("6.13")
+	KAPI_NOTES("FWCTL_RPC_DEBUG_WRITE and FWCTL_RPC_DEBUG_WRITE_FULL will "
+		   "taint the kernel with TAINT_FWCTL on first use")
+
+	/* Structure specifications */
+	KAPI_STRUCT_SPEC(0, fwctl_rpc, "RPC request/response structure")
+		KAPI_STRUCT_SIZE(sizeof(struct fwctl_rpc), __alignof__(struct fwctl_rpc))
+		KAPI_STRUCT_FIELD_COUNT(6)
+
+		KAPI_STRUCT_FIELD(0, "size", KAPI_TYPE_UINT, "__u32",
+				  "Structure size for versioning")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_rpc, size))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(1, "scope", KAPI_TYPE_UINT, "__u32",
+				  "Access scope level")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_rpc, scope))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+			KAPI_FIELD_CONSTRAINT_RANGE(FWCTL_RPC_CONFIGURATION, FWCTL_RPC_DEBUG_WRITE_FULL)
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(2, "in_len", KAPI_TYPE_UINT, "__u32",
+				  "Input data length")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_rpc, in_len))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(3, "out_len", KAPI_TYPE_UINT, "__u32",
+				  "Output buffer length")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_rpc, out_len))
+			KAPI_FIELD_SIZE(sizeof(__u32))
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(4, "in", KAPI_TYPE_PTR, "__aligned_u64",
+				  "Pointer to input data")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_rpc, in))
+			KAPI_FIELD_SIZE(sizeof(__aligned_u64))
+		KAPI_STRUCT_FIELD_END
+
+		KAPI_STRUCT_FIELD(5, "out", KAPI_TYPE_PTR, "__aligned_u64",
+				  "Pointer to output buffer")
+			KAPI_FIELD_OFFSET(offsetof(struct fwctl_rpc, out))
+			KAPI_FIELD_SIZE(sizeof(__aligned_u64))
+		KAPI_STRUCT_FIELD_END
+	KAPI_STRUCT_SPEC_END
+
+	KAPI_STRUCT_SPEC_COUNT(1)
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_HARDWARE | KAPI_EFFECT_MODIFY_STATE,
+			 "device firmware",
+			 "May modify device configuration or firmware state")
+		KAPI_EFFECT_CONDITION("scope >= FWCTL_RPC_DEBUG_WRITE")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE,
+			 "kernel taint",
+			 "Taints kernel with TAINT_FWCTL on first debug write")
+		KAPI_EFFECT_CONDITION("scope >= FWCTL_RPC_DEBUG_WRITE && first use")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_SCHEDULE,
+			 "process",
+			 "May block while firmware processes the RPC")
+		KAPI_EFFECT_CONDITION("firmware operation takes time")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(3)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "device state",
+			 "current configuration", "modified configuration",
+			 "Device configuration changed by RPC command")
+		KAPI_STATE_TRANS_COND("RPC modifies device settings")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "kernel taint state",
+			 "untainted", "TAINT_FWCTL set",
+			 "Kernel marked as tainted due to firmware modification")
+		KAPI_STATE_TRANS_COND("First debug write operation")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(2)
+KAPI_END_SPEC;
+
+static int kapi_ioctl_specs_init(void)
+{
+	return 0;
+}
+
+static void kapi_ioctl_specs_exit(void)
+{
+}
 
 static void fwctl_device_release(struct device *device)
 {
@@ -325,7 +593,7 @@ struct fwctl_device *_fwctl_alloc_device(struct device *parent,
 	if (!fwctl)
 		return NULL;
 
-	cdev_init(&fwctl->cdev, &fwctl_fops);
+	cdev_init(&fwctl->cdev, fwctl_fops);
 	/*
 	 * The driver module is protected by fwctl_register/unregister(),
 	 * unregister won't complete until we are done with the driver's module.
@@ -395,6 +663,9 @@ static int __init fwctl_init(void)
 {
 	int ret;
 
+	/* Initialize the wrapped file_operations */
+	kapi_init_fops_fwctl_fops();
+
 	ret = alloc_chrdev_region(&fwctl_dev, 0, FWCTL_MAX_DEVICES, "fwctl");
 	if (ret)
 		return ret;
@@ -402,8 +673,15 @@ static int __init fwctl_init(void)
 	ret = class_register(&fwctl_class);
 	if (ret)
 		goto err_chrdev;
+
+	ret = kapi_ioctl_specs_init();
+	if (ret)
+		goto err_class;
+
 	return 0;
 
+err_class:
+	class_unregister(&fwctl_class);
 err_chrdev:
 	unregister_chrdev_region(fwctl_dev, FWCTL_MAX_DEVICES);
 	return ret;
@@ -411,6 +689,7 @@ err_chrdev:
 
 static void __exit fwctl_exit(void)
 {
+	kapi_ioctl_specs_exit();
 	class_unregister(&fwctl_class);
 	unregister_chrdev_region(fwctl_dev, FWCTL_MAX_DEVICES);
 }
