@@ -43,6 +43,11 @@ struct sigaction;
  * @KAPI_TYPE_FD: File descriptor - validated in process context
  * @KAPI_TYPE_USER_PTR: User space pointer - validated for access and size
  * @KAPI_TYPE_PATH: Pathname - validated for access and path limits
+ * @KAPI_TYPE_STRING: String type - for sysfs and other string attributes
+ * @KAPI_TYPE_BOOL: Boolean type - for sysfs and other boolean attributes
+ * @KAPI_TYPE_HEX: Hexadecimal type - for sysfs hex values
+ * @KAPI_TYPE_BINARY: Binary data type - for sysfs binary attributes
+ * @KAPI_TYPE_BITMAP: Bitmap type - for sysfs bitmap attributes
  * @KAPI_TYPE_CUSTOM: Custom/complex types
  */
 enum kapi_param_type {
@@ -58,6 +63,11 @@ enum kapi_param_type {
 	KAPI_TYPE_FD,		/* File descriptor - validated in process context */
 	KAPI_TYPE_USER_PTR,	/* User space pointer - validated for access and size */
 	KAPI_TYPE_PATH,		/* Pathname - validated for access and path limits */
+	KAPI_TYPE_STRING,	/* String type - for sysfs and other string attributes */
+	KAPI_TYPE_BOOL,		/* Boolean type - for sysfs and other boolean attributes */
+	KAPI_TYPE_HEX,		/* Hexadecimal type - for sysfs hex values */
+	KAPI_TYPE_BINARY,	/* Binary data type - for sysfs binary attributes */
+	KAPI_TYPE_BITMAP,	/* Bitmap type - for sysfs bitmap attributes */
 	KAPI_TYPE_CUSTOM,
 };
 
@@ -72,6 +82,10 @@ enum kapi_param_type {
  * @KAPI_PARAM_USER: User space pointer
  * @KAPI_PARAM_DMA: DMA-capable memory required
  * @KAPI_PARAM_ALIGNED: Alignment requirements
+ * @KAPI_PARAM_SYSFS_READONLY: Sysfs read-only attribute
+ * @KAPI_PARAM_SYSFS_WRITEONLY: Sysfs write-only attribute
+ * @KAPI_PARAM_SYSFS_RW: Sysfs read-write attribute
+ * @KAPI_PARAM_SYSFS_BINARY: Sysfs binary attribute
  */
 enum kapi_param_flags {
 	KAPI_PARAM_IN		= (1 << 0),
@@ -83,6 +97,10 @@ enum kapi_param_flags {
 	KAPI_PARAM_USER		= (1 << 6),
 	KAPI_PARAM_DMA		= (1 << 7),
 	KAPI_PARAM_ALIGNED	= (1 << 8),
+	KAPI_PARAM_SYSFS_READONLY = (1 << 9),
+	KAPI_PARAM_SYSFS_WRITEONLY = (1 << 10),
+	KAPI_PARAM_SYSFS_RW	= (1 << 11),
+	KAPI_PARAM_SYSFS_BINARY = (1 << 12),
 };
 
 /**
@@ -164,6 +182,13 @@ enum kapi_constraint_type {
  * @constraints: Additional constraints description
  * @size_param_idx: Index of parameter that determines size (-1 if fixed size)
  * @size_multiplier: Multiplier for size calculation (e.g., sizeof(struct))
+ * @sysfs_path: Path in sysfs (for sysfs attributes)
+ * @sysfs_permissions: Sysfs file permissions (e.g., 0644)
+ * @default_value: Default value as string (for sysfs)
+ * @units: Units of measurement (e.g., "ms", "bytes")
+ * @step: Step value for numeric types
+ * @allowed_strings: Array of allowed string values
+ * @allowed_string_count: Number of allowed string values
  */
 struct kapi_param_spec {
 	char name[KAPI_MAX_NAME_LEN];
@@ -183,6 +208,14 @@ struct kapi_param_spec {
 	char constraints[KAPI_MAX_DESC_LEN];
 	int size_param_idx;	/* Index of param that determines size, -1 if N/A */
 	size_t size_multiplier;	/* Size per unit (e.g., sizeof(struct epoll_event)) */
+	/* Sysfs-specific fields */
+	char sysfs_path[KAPI_MAX_NAME_LEN];
+	umode_t sysfs_permissions;
+	char default_value[KAPI_MAX_NAME_LEN];
+	char units[32];
+	s64 step;
+	const char **allowed_strings;
+	u32 allowed_string_count;
 } __attribute__((packed));
 
 /**
@@ -668,8 +701,21 @@ struct kapi_addr_family_spec {
 #endif /* CONFIG_NET */
 
 /**
+ * enum kapi_api_type - Type of kernel API
+ * @KAPI_API_FUNCTION: Function/syscall API
+ * @KAPI_API_IOCTL: IOCTL API
+ * @KAPI_API_SYSFS: Sysfs attribute API
+ */
+enum kapi_api_type {
+	KAPI_API_FUNCTION = 0,
+	KAPI_API_IOCTL,
+	KAPI_API_SYSFS,
+};
+
+/**
  * struct kernel_api_spec - Complete kernel API specification
- * @name: Function name
+ * @name: Function/attribute name
+ * @api_type: Type of API (function, ioctl, sysfs)
  * @version: API version
  * @description: Brief description
  * @long_description: Detailed description
@@ -698,9 +744,12 @@ struct kapi_addr_family_spec {
  * @side_effects: Side effect specifications
  * @state_trans_count: Number of state transition specifications
  * @state_transitions: State transition specifications
+ * @subsystem: Subsystem name (for sysfs)
+ * @device_type: Device type (for sysfs)
  */
 struct kernel_api_spec {
 	char name[KAPI_MAX_NAME_LEN];
+	enum kapi_api_type api_type;
 	u32 version;
 	char description[KAPI_MAX_DESC_LEN];
 	char long_description[KAPI_MAX_DESC_LEN * 4];
@@ -786,6 +835,10 @@ struct kernel_api_spec {
 	size_t input_size;			/* Size of input structure (0 if none) */
 	size_t output_size;			/* Size of output structure (0 if none) */
 	char file_ops_name[KAPI_MAX_NAME_LEN];	/* Name of the file_operations structure */
+
+	/* Sysfs-specific fields */
+	char subsystem[KAPI_MAX_NAME_LEN];
+	char device_type[KAPI_MAX_NAME_LEN];
 } __attribute__((packed));
 
 /* Macros for defining API specifications */
@@ -1208,6 +1261,47 @@ struct kernel_api_spec {
 #define KAPI_EFFECTS_RESOURCES	(KAPI_EFFECT_RESOURCE_CREATE | KAPI_EFFECT_RESOURCE_DESTROY)
 #define KAPI_EFFECTS_IO		(KAPI_EFFECT_NETWORK | KAPI_EFFECT_FILESYSTEM)
 
+/* Sysfs-specific macros */
+
+/**
+ * DEFINE_SYSFS_API_SPEC - Define a sysfs attribute API specification
+ * @attr_name: Sysfs attribute name
+ */
+#define DEFINE_SYSFS_API_SPEC(attr_name) \
+	static struct kernel_api_spec __kapi_sysfs_spec_##attr_name \
+	__used __section(".kapi_specs") = {	\
+		.name = __stringify(attr_name),	\
+		.api_type = KAPI_API_SYSFS,	\
+		.version = 1,
+
+/**
+ * For sysfs attributes, use KAPI_PARAM with sysfs-specific fields
+ */
+#define KAPI_PATH(path) \
+		.sysfs_path = path,
+
+#define KAPI_PERMISSIONS(perms) \
+		.sysfs_permissions = perms,
+
+#define KAPI_DEFAULT(defval) \
+		.default_value = defval,
+
+#define KAPI_UNITS(unit) \
+		.units = unit,
+
+#define KAPI_STEP(s) \
+		.step = s,
+
+#define KAPI_ALLOWED_STRINGS(strings, count) \
+		.allowed_strings = strings,	\
+		.allowed_string_count = count,
+
+#define KAPI_SUBSYSTEM(subsys) \
+	.subsystem = subsys,
+
+#define KAPI_DEVICE_TYPE(dtype) \
+	.device_type = dtype,
+
 /* Helper macros for common patterns */
 
 #define KAPI_PARAM_IN		(KAPI_PARAM_IN)
@@ -1329,6 +1423,13 @@ bool kapi_validate_signal_action(const struct kernel_api_spec *spec, int signum,
 				 struct sigaction *act);
 int kapi_get_signal_error(const struct kernel_api_spec *spec, int signum);
 bool kapi_is_signal_restartable(const struct kernel_api_spec *spec, int signum);
+
+/* Sysfs validation functions */
+int kapi_validate_sysfs_write(const char *attr_name, const char *buf, size_t count);
+int kapi_validate_sysfs_read(const char *attr_name);
+int kapi_validate_sysfs_permission(const char *attr_name, umode_t mode);
+bool kapi_validate_sysfs_string(const struct kapi_param_spec *param, const char *buf, size_t count);
+bool kapi_validate_sysfs_number(const struct kapi_param_spec *param, const char *buf);
 #else
 static inline bool kapi_validate_params(const struct kernel_api_spec *spec, ...)
 {
@@ -1383,6 +1484,26 @@ static inline int kapi_get_signal_error(const struct kernel_api_spec *spec, int 
 static inline bool kapi_is_signal_restartable(const struct kernel_api_spec *spec, int signum)
 {
 	return false;
+}
+static inline int kapi_validate_sysfs_write(const char *attr_name, const char *buf, size_t count)
+{
+	return 0;
+}
+static inline int kapi_validate_sysfs_read(const char *attr_name)
+{
+	return 0;
+}
+static inline int kapi_validate_sysfs_permission(const char *attr_name, umode_t mode)
+{
+	return 0;
+}
+static inline bool kapi_validate_sysfs_string(const struct kapi_param_spec *param, const char *buf, size_t count)
+{
+	return true;
+}
+static inline bool kapi_validate_sysfs_number(const struct kapi_param_spec *param, const char *buf)
+{
+	return true;
 }
 #endif
 

@@ -139,6 +139,11 @@ static const char *param_type_to_string(enum kapi_param_type type)
 		[KAPI_TYPE_FD] = "file_descriptor",
 		[KAPI_TYPE_USER_PTR] = "user_pointer",
 		[KAPI_TYPE_PATH] = "pathname",
+		[KAPI_TYPE_STRING] = "string",
+		[KAPI_TYPE_BOOL] = "bool",
+		[KAPI_TYPE_HEX] = "hex",
+		[KAPI_TYPE_BINARY] = "binary",
+		[KAPI_TYPE_BITMAP] = "bitmap",
 		[KAPI_TYPE_CUSTOM] = "custom",
 	};
 
@@ -238,11 +243,15 @@ int kapi_export_json(const struct kernel_api_spec *spec, char *buf, size_t size)
 	ret = scnprintf(buf, size,
 		"{\n"
 		"  \"name\": \"%s\",\n"
+		"  \"api_type\": \"%s\",\n"
 		"  \"version\": %u,\n"
 		"  \"description\": \"%s\",\n"
 		"  \"long_description\": \"%s\",\n"
 		"  \"context_flags\": \"0x%x\",\n",
 		spec->name,
+		spec->api_type == KAPI_API_FUNCTION ? "function" :
+		spec->api_type == KAPI_API_IOCTL ? "ioctl" :
+		spec->api_type == KAPI_API_SYSFS ? "sysfs" : "unknown",
 		spec->version,
 		spec->description,
 		spec->long_description,
@@ -261,13 +270,38 @@ int kapi_export_json(const struct kernel_api_spec *spec, char *buf, size_t size)
 			"      \"type\": \"%s\",\n"
 			"      \"type_class\": \"%s\",\n"
 			"      \"flags\": \"0x%x\",\n"
-			"      \"description\": \"%s\"\n"
-			"    }%s\n",
+			"      \"description\": \"%s\"",
 			param->name,
 			param->type_name,
 			param_type_to_string(param->type),
 			param->flags,
-			param->description,
+			param->description);
+
+		/* Add sysfs-specific fields if this is a sysfs API */
+		if (spec->api_type == KAPI_API_SYSFS) {
+			if (param->sysfs_path[0])
+				ret += scnprintf(buf + ret, size - ret,
+					",\n      \"sysfs_path\": \"%s\"", param->sysfs_path);
+			if (param->sysfs_permissions)
+				ret += scnprintf(buf + ret, size - ret,
+					",\n      \"permissions\": \"0%o\"", param->sysfs_permissions);
+			if (param->default_value[0])
+				ret += scnprintf(buf + ret, size - ret,
+					",\n      \"default_value\": \"%s\"", param->default_value);
+			if (param->units[0])
+				ret += scnprintf(buf + ret, size - ret,
+					",\n      \"units\": \"%s\"", param->units);
+			if (param->step)
+				ret += scnprintf(buf + ret, size - ret,
+					",\n      \"step\": %lld", param->step);
+			if (param->min_value != 0 || param->max_value != 0)
+				ret += scnprintf(buf + ret, size - ret,
+					",\n      \"range\": [%lld, %lld]",
+					param->min_value, param->max_value);
+		}
+
+		ret += scnprintf(buf + ret, size - ret,
+			"\n    }%s\n",
 			(i < spec->param_count - 1) ? "," : "");
 	}
 
@@ -409,13 +443,25 @@ int kapi_export_json(const struct kernel_api_spec *spec, char *buf, size_t size)
 	ret += scnprintf(buf + ret, size - ret,
 		"  \"since_version\": \"%s\",\n"
 		"  \"deprecated\": %s,\n"
-		"  \"replacement\": \"%s\",\n"
+		"  \"replacement\": \"%s\",\n",
+		spec->since_version,
+		spec->deprecated ? "true" : "false",
+		spec->replacement);
+
+	/* Sysfs-specific fields */
+	if (spec->api_type == KAPI_API_SYSFS) {
+		if (spec->subsystem[0])
+			ret += scnprintf(buf + ret, size - ret,
+				"  \"subsystem\": \"%s\",\n", spec->subsystem);
+		if (spec->device_type[0])
+			ret += scnprintf(buf + ret, size - ret,
+				"  \"device_type\": \"%s\",\n", spec->device_type);
+	}
+
+	ret += scnprintf(buf + ret, size - ret,
 		"  \"examples\": \"%s\",\n"
 		"  \"notes\": \"%s\"\n"
 		"}\n",
-		spec->since_version,
-		spec->deprecated ? "true" : "false",
-		spec->replacement,
 		spec->examples,
 		spec->notes);
 
@@ -491,6 +537,282 @@ void kapi_print_spec(const struct kernel_api_spec *spec)
 EXPORT_SYMBOL_GPL(kapi_print_spec);
 
 #ifdef CONFIG_KAPI_RUNTIME_CHECKS
+
+/**
+ * kapi_validate_sysfs_string - Validate a string value for sysfs
+ * @param: Parameter specification
+ * @buf: Buffer containing the string
+ * @count: Size of buffer
+ *
+ * Return: true if valid, false otherwise
+ */
+bool kapi_validate_sysfs_string(const struct kapi_param_spec *param,
+				 const char *buf, size_t count)
+{
+	size_t len = count;
+	int i;
+
+	if (!param || param->type != KAPI_TYPE_STRING)
+		return false;
+
+	/* Remove trailing newline if present */
+	if (len > 0 && buf[len - 1] == '\n')
+		len--;
+
+	/* Check length constraints */
+	if (param->size > 0 && len > param->size) {
+		pr_warn("Sysfs %s: string too long (max: %zu, got: %zu)\n",
+			param->name, param->size, len);
+		return false;
+	}
+
+	/* Check against allowed values if specified */
+	if (param->allowed_strings && param->allowed_string_count > 0) {
+		char *str = kstrndup(buf, len, GFP_KERNEL);
+		bool found = false;
+
+		if (!str)
+			return false;
+
+		for (i = 0; i < param->allowed_string_count; i++) {
+			if (strcmp(str, param->allowed_strings[i]) == 0) {
+				found = true;
+				break;
+			}
+		}
+
+		kfree(str);
+
+		if (!found) {
+			pr_warn("Sysfs %s: value not in allowed list\n", param->name);
+			return false;
+		}
+	}
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(kapi_validate_sysfs_string);
+
+/**
+ * kapi_validate_sysfs_number - Validate a numeric value for sysfs
+ * @param: Parameter specification
+ * @buf: Buffer containing the value
+ *
+ * Return: true if valid, false otherwise
+ */
+bool kapi_validate_sysfs_number(const struct kapi_param_spec *param,
+				 const char *buf)
+{
+	s64 int_val;
+	u64 uint_val;
+	int ret;
+
+	if (!param)
+		return false;
+
+	switch (param->type) {
+	case KAPI_TYPE_INT:
+		ret = kstrtoll(buf, 0, &int_val);
+		if (ret) {
+			pr_warn("Sysfs %s: invalid integer format\n", param->name);
+			return false;
+		}
+
+		/* Check range constraints */
+		if (int_val < param->min_value || int_val > param->max_value) {
+			pr_warn("Sysfs %s: value %lld out of range [%lld, %lld]\n",
+				param->name, int_val, param->min_value, param->max_value);
+			return false;
+		}
+
+		/* Check step constraint */
+		if (param->step > 0) {
+			s64 offset = int_val - param->min_value;
+			if (offset % param->step != 0) {
+				pr_warn("Sysfs %s: value %lld not aligned to step %lld\n",
+					param->name, int_val, param->step);
+				return false;
+			}
+		}
+		break;
+
+	case KAPI_TYPE_UINT:
+	case KAPI_TYPE_HEX:
+		ret = kstrtoull(buf, 0, &uint_val);
+		if (ret) {
+			pr_warn("Sysfs %s: invalid unsigned integer format\n", param->name);
+			return false;
+		}
+
+		/* Check range constraints */
+		if (uint_val < (u64)param->min_value || uint_val > (u64)param->max_value) {
+			pr_warn("Sysfs %s: value %llu out of range [%llu, %llu]\n",
+				param->name, uint_val, (u64)param->min_value, (u64)param->max_value);
+			return false;
+		}
+
+		/* Check valid bits mask */
+		if (param->valid_mask && (uint_val & ~param->valid_mask)) {
+			pr_warn("Sysfs %s: value 0x%llx contains invalid bits (mask: 0x%llx)\n",
+				param->name, uint_val, param->valid_mask);
+			return false;
+		}
+		break;
+
+	case KAPI_TYPE_BOOL:
+		{
+			bool val;
+			ret = kstrtobool(buf, &val);
+			if (ret) {
+				pr_warn("Sysfs %s: invalid boolean value\n", param->name);
+				return false;
+			}
+		}
+		break;
+
+	default:
+		pr_warn("Sysfs %s: unsupported type %d for numeric validation\n",
+			param->name, param->type);
+		return false;
+	}
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(kapi_validate_sysfs_number);
+
+/**
+ * kapi_validate_sysfs_write - Validate a write operation to sysfs attribute
+ * @attr_name: Name of the sysfs attribute
+ * @buf: Buffer containing the value to write
+ * @count: Size of buffer
+ *
+ * Return: 0 if valid, negative error code otherwise
+ */
+int kapi_validate_sysfs_write(const char *attr_name, const char *buf, size_t count)
+{
+	const struct kernel_api_spec *spec;
+	const struct kapi_param_spec *param;
+	int ret;
+
+	spec = kapi_get_spec(attr_name);
+	if (!spec || spec->api_type != KAPI_API_SYSFS)
+		return 0; /* No spec or not a sysfs spec, allow operation */
+
+	if (spec->param_count == 0)
+		return 0; /* No parameters defined */
+
+	param = &spec->params[0]; /* Sysfs attributes have single parameter */
+
+	/* Check access permissions */
+	if (param->flags & KAPI_PARAM_SYSFS_READONLY) {
+		pr_warn("Sysfs %s: write to read-only attribute\n", attr_name);
+		return -EPERM;
+	}
+
+	/* Validate based on type */
+	switch (param->type) {
+	case KAPI_TYPE_STRING:
+		if (!kapi_validate_sysfs_string(param, buf, count))
+			return -EINVAL;
+		break;
+
+	case KAPI_TYPE_INT:
+	case KAPI_TYPE_UINT:
+	case KAPI_TYPE_HEX:
+	case KAPI_TYPE_BOOL:
+		if (!kapi_validate_sysfs_number(param, buf))
+			return -EINVAL;
+		break;
+
+	case KAPI_TYPE_BINARY:
+		/* Binary attributes have their own validation */
+		if (param->size > 0 && count > param->size) {
+			pr_warn("Sysfs %s: binary data too large (max: %zu)\n",
+				attr_name, param->size);
+			return -EINVAL;
+		}
+		break;
+
+	case KAPI_TYPE_CUSTOM:
+		if (param->validate) {
+			ret = param->validate((s64)(unsigned long)buf);
+			if (!ret) {
+				pr_warn("Sysfs %s: custom validation failed\n", attr_name);
+				return -EINVAL;
+			}
+		}
+		break;
+
+	default:
+		pr_warn("Sysfs %s: unknown type %d\n", attr_name, param->type);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(kapi_validate_sysfs_write);
+
+/**
+ * kapi_validate_sysfs_read - Validate a read operation from sysfs attribute
+ * @attr_name: Name of the sysfs attribute
+ *
+ * Return: 0 if valid, negative error code otherwise
+ */
+int kapi_validate_sysfs_read(const char *attr_name)
+{
+	const struct kernel_api_spec *spec;
+	const struct kapi_param_spec *param;
+
+	spec = kapi_get_spec(attr_name);
+	if (!spec || spec->api_type != KAPI_API_SYSFS)
+		return 0; /* No spec or not a sysfs spec, allow operation */
+
+	if (spec->param_count == 0)
+		return 0; /* No parameters defined */
+
+	param = &spec->params[0]; /* Sysfs attributes have single parameter */
+
+	/* Check access permissions */
+	if (param->flags & KAPI_PARAM_SYSFS_WRITEONLY) {
+		pr_warn("Sysfs %s: read from write-only attribute\n", attr_name);
+		return -EPERM;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(kapi_validate_sysfs_read);
+
+/**
+ * kapi_validate_sysfs_permission - Validate permission change for sysfs attribute
+ * @attr_name: Name of the sysfs attribute
+ * @mode: New permission mode
+ *
+ * Return: 0 if valid, negative error code otherwise
+ */
+int kapi_validate_sysfs_permission(const char *attr_name, umode_t mode)
+{
+	const struct kernel_api_spec *spec;
+	const struct kapi_param_spec *param;
+
+	spec = kapi_get_spec(attr_name);
+	if (!spec || spec->api_type != KAPI_API_SYSFS)
+		return 0; /* No spec or not a sysfs spec, allow operation */
+
+	if (spec->param_count == 0)
+		return 0; /* No parameters defined */
+
+	param = &spec->params[0]; /* Sysfs attributes have single parameter */
+
+	/* Check if permissions match specification */
+	if (param->sysfs_permissions && param->sysfs_permissions != mode) {
+		pr_warn("Sysfs %s: permission mismatch (expected: 0%o, got: 0%o)\n",
+			attr_name, param->sysfs_permissions, mode);
+		/* We warn but don't fail - this might be intentional */
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(kapi_validate_sysfs_permission);
 
 /**
  * kapi_validate_fd - Validate that a file descriptor is valid in current context
