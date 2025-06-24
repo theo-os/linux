@@ -964,6 +964,19 @@ struct kernel_api_spec {
 	.notes = n,
 
 /**
+ * KAPI_DEPRECATED - Mark API as deprecated
+ */
+#define KAPI_DEPRECATED \
+	.deprecated = true,
+
+/**
+ * KAPI_REPLACEMENT - Set replacement API for deprecated function
+ * @repl: Replacement API name
+ */
+#define KAPI_REPLACEMENT(repl) \
+	.replacement = repl,
+
+/**
  * KAPI_SIGNAL - Define a signal specification
  * @idx: Signal index
  * @signum: Signal number (e.g., SIGKILL)

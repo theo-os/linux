@@ -2300,8 +2300,8 @@ DEFINE_KERNEL_API_SPEC(sys_epoll_create1)
 	KAPI_ERROR(4, -EINTR, "EINTR", "Interrupted by signal",
 		   "The system call was interrupted by a signal before the epoll instance could be created.")
 
-	.error_count = 5,
-	.param_count = 1,
+	KAPI_ERROR_COUNT(5)
+	KAPI_PARAM_COUNT(1)
 	.since_version = "2.6.27",
 	KAPI_EXAMPLES("int epfd = epoll_create1(EPOLL_CLOEXEC);")
 	KAPI_NOTES("EPOLL_CLOEXEC sets the close-on-exec (FD_CLOEXEC) flag on the new file descriptor. "
@@ -2366,7 +2366,7 @@ DEFINE_KERNEL_API_SPEC(sys_epoll_create1)
 		KAPI_SIGNAL_QUEUE("uncatchable")
 	KAPI_SIGNAL_END
 
-	.signal_count = 3,
+	KAPI_SIGNAL_COUNT(3)
 
 	/* Additional constraints */
 	KAPI_CONSTRAINT(0, "User Watch Limit",
@@ -2393,6 +2393,122 @@ SYSCALL_DEFINE1(epoll_create1, int, flags)
 {
 	return do_epoll_create(flags);
 }
+
+
+DEFINE_KERNEL_API_SPEC(sys_epoll_create)
+	KAPI_DESCRIPTION("Create an epoll instance (obsolete)")
+	KAPI_LONG_DESC("Creates a new epoll instance and returns a file descriptor "
+		       "referring to that instance. This is the obsolete interface; "
+		       "new applications should use epoll_create1() instead.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	KAPI_PARAM(0, "size", "int", "Ignored hint about expected number of file descriptors")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_RANGE(1, INT_MAX)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_CONSTRAINT("Must be greater than zero (ignored since Linux 2.6.8)")
+	KAPI_PARAM_END
+
+	KAPI_RETURN("long", "File descriptor on success, negative error code on failure")
+		KAPI_RETURN_TYPE(KAPI_TYPE_INT)
+		KAPI_RETURN_CHECK_TYPE(KAPI_RETURN_FD)
+	KAPI_RETURN_END
+
+	KAPI_ERROR(0, -EINVAL, "EINVAL", "size <= 0",
+		   "The size parameter must be greater than zero.")
+	KAPI_ERROR(1, -EMFILE, "EMFILE", "Per-process file descriptor limit reached",
+		   "The per-process limit on the number of open file descriptors has been reached.")
+	KAPI_ERROR(2, -ENFILE, "ENFILE", "System file table overflow",
+		   "The system-wide limit on the total number of open files has been reached.")
+	KAPI_ERROR(3, -ENOMEM, "ENOMEM", "Insufficient kernel memory",
+		   "There was insufficient kernel memory to create the epoll instance.")
+	KAPI_ERROR(4, -EINTR, "EINTR", "Interrupted by signal",
+		   "The system call was interrupted by a signal before the epoll instance could be created.")
+
+	KAPI_ERROR_COUNT(5)
+	KAPI_PARAM_COUNT(1)
+	KAPI_SINCE_VERSION("2.6")
+	KAPI_DEPRECATED
+	KAPI_REPLACEMENT("epoll_create1")
+	KAPI_EXAMPLES("int epfd = epoll_create(1024); // size is ignored since Linux 2.6.8")
+	KAPI_NOTES("Since Linux 2.6.8, the size argument is ignored but must be greater than zero. "
+		   "The kernel dynamically sizes the data structures as needed. "
+		   "For new applications, epoll_create1() should be preferred as it allows "
+		   "setting close-on-exec flag atomically. "
+		   "Memory consumption: Each registered fd uses approximately 90 bytes on 32-bit kernels "
+		   "and 160 bytes on 64-bit kernels. The total number of file descriptors registered "
+		   "across all epoll instances is limited by /proc/sys/fs/epoll/max_user_watches. "
+		   "When using dup() or fork(), multiple file descriptors may refer to the same epoll "
+		   "instance and all will receive events.")
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_RESOURCE_CREATE | KAPI_EFFECT_ALLOC_MEMORY,
+			 "epoll instance",
+			 "Creates a new epoll instance and allocates kernel memory for it")
+		KAPI_EFFECT_CONDITION("Always when successful")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_RESOURCE_CREATE,
+			 "file descriptor",
+			 "Allocates a new file descriptor in the process's file descriptor table")
+		KAPI_EFFECT_CONDITION("Always when successful")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_MODIFY_STATE,
+			 "kernel file table",
+			 "Adds new file structure to system-wide file table")
+		KAPI_EFFECT_CONDITION("Always when successful")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT_COUNT(3)
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "epoll instance", "non-existent", "created and empty",
+			 "A new epoll instance is created with no monitored file descriptors")
+		KAPI_STATE_TRANS_COND("On successful creation")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "file descriptor", "unallocated", "allocated and open",
+			 "A new file descriptor is allocated in the process's fd table")
+		KAPI_STATE_TRANS_COND("On successful creation")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS_COUNT(2)
+
+	/* Signal specifications */
+	KAPI_SIGNAL(0, SIGINT, "SIGINT", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("During kernel memory allocation")
+		KAPI_SIGNAL_DESC("If interrupted during memory allocation or fd allocation, returns -EINTR")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(1, SIGTERM, "SIGTERM", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("During kernel memory allocation")
+		KAPI_SIGNAL_DESC("If interrupted during memory allocation or fd allocation, returns -EINTR")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(2, SIGKILL, "SIGKILL", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_TERMINATE)
+		KAPI_SIGNAL_CONDITION("At any point during the syscall")
+		KAPI_SIGNAL_DESC("Process is terminated immediately, epoll instance creation may be incomplete")
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(3, SIGHUP, "SIGHUP", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("During kernel operations")
+		KAPI_SIGNAL_DESC("If process is being terminated due to terminal hangup, may return -EINTR")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(4, SIGPIPE, "SIGPIPE", KAPI_SIGNAL_IGNORE, KAPI_SIGNAL_ACTION_DEFAULT)
+		KAPI_SIGNAL_CONDITION("Never generated by epoll_create")
+		KAPI_SIGNAL_DESC("This signal is not relevant to epoll_create as it doesn't involve pipes")
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL_COUNT(5)
+KAPI_END_SPEC;
 
 SYSCALL_DEFINE1(epoll_create, int, size)
 {
