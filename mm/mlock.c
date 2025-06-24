@@ -805,6 +805,169 @@ SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
 	return do_mlock(start, len, VM_LOCKED);
 }
 
+
+DEFINE_KERNEL_API_SPEC(sys_mlock2)
+	KAPI_DESCRIPTION("Lock pages in memory with flags")
+	KAPI_LONG_DESC("Enhanced version of mlock() that supports flags. "
+		       "MLOCK_ONFAULT flag allows locking pages on fault rather than immediately.")
+	KAPI_CONTEXT(KAPI_CTX_PROCESS | KAPI_CTX_SLEEPABLE)
+
+	/* Parameters */
+	KAPI_PARAM(0, "start", "unsigned long", "Starting address of memory range to lock")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_NONE)
+		KAPI_PARAM_CONSTRAINT("Rounded down to page boundary")
+	KAPI_PARAM_END
+
+	KAPI_PARAM(1, "len", "size_t", "Length of memory range to lock in bytes")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_UINT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_RANGE)
+		KAPI_PARAM_RANGE(0, LONG_MAX)
+		KAPI_PARAM_CONSTRAINT("Rounded up to page boundary")
+	KAPI_PARAM_END
+
+	KAPI_PARAM(2, "flags", "int", "Flags controlling lock behavior")
+		KAPI_PARAM_FLAGS(KAPI_PARAM_IN)
+		KAPI_PARAM_TYPE(KAPI_TYPE_INT)
+		KAPI_PARAM_CONSTRAINT_TYPE(KAPI_CONSTRAINT_MASK)
+		KAPI_PARAM_VALID_MASK(MLOCK_ONFAULT)
+		KAPI_PARAM_CONSTRAINT("Only MLOCK_ONFAULT flag is currently supported")
+	KAPI_PARAM_END
+
+	/* Return specification */
+	KAPI_RETURN("long", "0 on success, negative error code on failure")
+		KAPI_RETURN_TYPE(KAPI_TYPE_INT)
+		.check_type = KAPI_RETURN_ERROR_CHECK,
+		.success_value = 0,
+	KAPI_RETURN_END
+
+	/* Error codes */
+	KAPI_ERROR(0, -EINVAL, "EINVAL", "Invalid flags", "Unknown flags were specified (flags & ~MLOCK_ONFAULT).")
+	KAPI_ERROR(1, -ENOMEM, "ENOMEM", "Address range issue", "Some of the specified range is not mapped, has unmapped gaps, or the lock would cause the number of mapped regions to exceed the limit.")
+	KAPI_ERROR(2, -EPERM, "EPERM", "Insufficient privileges", "The caller is not privileged (no CAP_IPC_LOCK) and RLIMIT_MEMLOCK is 0.")
+	KAPI_ERROR(3, -EAGAIN, "EAGAIN", "Some or all memory could not be locked", "Some or all of the specified address range could not be locked.")
+	KAPI_ERROR(4, -EINTR, "EINTR", "Interrupted by signal", "The operation was interrupted by a fatal signal before completion.")
+
+	/* Signal specifications */
+	KAPI_SIGNAL(0, 0, "FATAL_SIGNALS", KAPI_SIGNAL_RECEIVE, KAPI_SIGNAL_ACTION_RETURN)
+		KAPI_SIGNAL_CONDITION("Fatal signal pending during mmap_write_lock_killable")
+		KAPI_SIGNAL_DESC("Fatal signals (SIGKILL, SIGTERM, etc.) can interrupt the operation when acquiring mmap_write_lock_killable(), causing -EINTR return")
+		KAPI_SIGNAL_RESTARTABLE
+	KAPI_SIGNAL_END
+
+	KAPI_SIGNAL(1, SIGBUS, "SIGBUS", KAPI_SIGNAL_SEND, KAPI_SIGNAL_ACTION_DEFAULT)
+		KAPI_SIGNAL_TARGET("Current process")
+		KAPI_SIGNAL_CONDITION("Memory access to locked page fails")
+		KAPI_SIGNAL_DESC("Can be generated if accessing a locked page that cannot be brought into memory (e.g., truncated file mapping)")
+	KAPI_SIGNAL_END
+
+	/* Side effects */
+	KAPI_SIDE_EFFECT(0, KAPI_EFFECT_MODIFY_STATE | KAPI_EFFECT_ALLOC_MEMORY,
+			 "process memory",
+			 "Locks pages into physical memory, preventing swapping")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("Pages become resident in RAM")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(1, KAPI_EFFECT_MODIFY_STATE,
+			 "mm->locked_vm",
+			 "Increases process locked memory counter")
+		KAPI_EFFECT_REVERSIBLE
+		KAPI_EFFECT_CONDITION("Counted against RLIMIT_MEMLOCK")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(2, KAPI_EFFECT_ALLOC_MEMORY,
+			 "page tables",
+			 "May allocate and populate page table entries")
+		KAPI_EFFECT_CONDITION("Pages not already present")
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(3, KAPI_EFFECT_MODIFY_STATE,
+			 "VMA flags",
+			 "Sets VM_LOCKED and optionally VM_LOCKONFAULT on affected VMAs")
+		KAPI_EFFECT_REVERSIBLE
+	KAPI_SIDE_EFFECT_END
+
+	KAPI_SIDE_EFFECT(4, KAPI_EFFECT_FILESYSTEM,
+			 "page fault behavior",
+			 "With MLOCK_ONFAULT, changes how future page faults are handled")
+		KAPI_EFFECT_CONDITION("MLOCK_ONFAULT flag specified")
+	KAPI_SIDE_EFFECT_END
+
+	/* State transitions */
+	KAPI_STATE_TRANS(0, "memory pages",
+			 "swappable", "locked in RAM",
+			 "Pages become non-swappable and pinned in physical memory")
+		KAPI_STATE_TRANS_COND("Without MLOCK_ONFAULT")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(1, "VMA flags",
+			 "unlocked", "VM_LOCKED set",
+			 "Virtual memory area marked as locked")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(2, "VMA flags",
+			 "normal fault", "VM_LOCKONFAULT set",
+			 "VMA marked to lock pages on future faults")
+		KAPI_STATE_TRANS_COND("MLOCK_ONFAULT flag specified")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(3, "page residency",
+			 "may be swapped", "resident in memory",
+			 "Pages brought into RAM and kept there")
+		KAPI_STATE_TRANS_COND("Without MLOCK_ONFAULT")
+	KAPI_STATE_TRANS_END
+
+	KAPI_STATE_TRANS(4, "process statistics",
+			 "normal memory accounting", "locked memory accounting",
+			 "Memory counted against RLIMIT_MEMLOCK")
+	KAPI_STATE_TRANS_END
+
+	/* Locking information */
+	KAPI_LOCK(0, "mmap_lock", KAPI_LOCK_RWLOCK)
+		KAPI_LOCK_DESC("Process memory map write lock")
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Protects VMA modifications during lock operation")
+	KAPI_LOCK_END
+
+	KAPI_LOCK(1, "lru_lock", KAPI_LOCK_SPINLOCK)
+		KAPI_LOCK_DESC("Per-memcg LRU list lock")
+		KAPI_LOCK_ACQUIRED
+		KAPI_LOCK_RELEASED
+		KAPI_LOCK_DESC("Taken when moving pages to unevictable list when locking pages")
+	KAPI_LOCK_END
+
+	KAPI_ERROR_COUNT(5)
+	KAPI_PARAM_COUNT(3)
+	KAPI_SINCE_VERSION("4.4")
+	KAPI_SIGNAL_COUNT(2)
+	KAPI_SIDE_EFFECT_COUNT(5)
+	KAPI_STATE_TRANS_COUNT(5)
+	KAPI_LOCK_COUNT(2)
+
+	/* Capability specifications */
+	KAPI_CAPABILITY(0, CAP_IPC_LOCK, "CAP_IPC_LOCK", KAPI_CAP_BYPASS_CHECK)
+		KAPI_CAP_ALLOWS("Lock unlimited amount of memory (no RLIMIT_MEMLOCK enforcement)")
+		KAPI_CAP_WITHOUT("Must respect RLIMIT_MEMLOCK resource limit")
+		KAPI_CAP_CONDITION("Checked when RLIMIT_MEMLOCK is 0 or locking would exceed limit")
+		KAPI_CAP_PRIORITY(0)
+	KAPI_CAPABILITY_END
+
+	KAPI_CAPABILITY_COUNT(1)
+
+	KAPI_EXAMPLES("mlock2(addr, len, 0);            // Same as mlock()\n"
+		      "mlock2(addr, len, MLOCK_ONFAULT); // Lock on fault")
+	KAPI_NOTES("MLOCK_ONFAULT flag defers actual page locking until pages are accessed. "
+		   "Memory locks do not stack. Locks are not inherited by child processes. "
+		   "Commonly used by real-time applications to prevent page faults. Also used "
+		   "for security to prevent sensitive data (e.g., cryptographic keys) from being "
+		   "written to swap. Note: locked pages may still be saved to swap during "
+		   "system suspend/hibernate.")
+KAPI_END_SPEC;
+
 SYSCALL_DEFINE3(mlock2, unsigned long, start, size_t, len, int, flags)
 {
 	vm_flags_t vm_flags = VM_LOCKED;
