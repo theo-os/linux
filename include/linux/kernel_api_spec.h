@@ -863,6 +863,9 @@ struct kernel_api_spec {
 		.enum_values = values, \
 		.enum_count = ARRAY_SIZE(values),
 
+#define KAPI_PARAM_SIZE_PARAM_IDX(idx) \
+		.size_param_idx = idx,
+
 #define KAPI_PARAM_END },
 
 /**
